@@ -15,7 +15,7 @@ parser.add_argument('output', help = 'output file basename')
 args = parser.parse_args()
 
 def hamdist(str1, str2): # From http://code.activestate.com/recipes/499304-hamming-distance/
-    """Count the # of differences between equal length strings str1 and str2"""
+    """Count the number of differences between equal length strings str1 and str2"""
     diffs = 0
     for ch1, ch2 in zip(str1, str2):
         if ch1 != ch2:
@@ -23,10 +23,11 @@ def hamdist(str1, str2): # From http://code.activestate.com/recipes/499304-hammi
     return diffs
 
 # some of the libraries were cloned slightly differently so the barcodes are in a slightly different position
-# this function checks and 
+# this function checks and returns the correct barcode
 def check_random_bc(seq):
+    """Finds barcode at correct position"""
     if seq.startswith('GATCA'):
-        return seq[53:]
+        return seq[5:]
     else:
         return seq[:16]
 
