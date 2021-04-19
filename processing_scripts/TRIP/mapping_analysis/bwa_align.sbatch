@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #SBATCH --mail-type=END
-#SBATCH --mail-user=hongkityeeclarice@htcf.wustl.edu
+#SBATCH --mail-user=<user_email>
 #SBATCH --mem=8196
 #SBATCH --cpus-per-task=4
 
@@ -10,9 +10,9 @@
 module load bwa
 module load samtools
 
-read read1 read2 output < <( sed -n ${SLURM_ARRAY_TASK_ID}p lookup.txt )
+read read1 output < <( sed -n ${SLURM_ARRAY_TASK_ID}p lookup.txt )
 
-bwa mem /home/hongkityeeclarice/cohen_lab/hg38_ensembl/hg38 ${read1} ${read2} > ${output}.sam
+bwa mem <path to genome> ${read1} > ${output}.sam
 
 samtools view -bS ${output}.sam > ${output}.bam
 
