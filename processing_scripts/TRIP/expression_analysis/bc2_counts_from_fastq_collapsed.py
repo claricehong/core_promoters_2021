@@ -7,10 +7,10 @@ import re
 import gzip
 from collections import defaultdict
 
-parser = argparse.ArgumentParser(description = 'Gets insulator/TRIP barcode counts from fastq files')
+parser = argparse.ArgumentParser(description = 'Gets promoter/TRIP barcode counts from fastq files')
 parser.add_argument('fastq', help = 'input fastq file (either gzip or uncompressed)')
 parser.add_argument('primer', help = 'primer sequence used for PCR')
-parser.add_argument('TRIP_BCs', help = 'insulator names and barcodes')
+parser.add_argument('TRIP_BCs', help = 'promoter names and barcodes')
 parser.add_argument('output', help = 'output file basename')
 args = parser.parse_args()
 
@@ -34,22 +34,22 @@ def check_random_bc(seq):
 # set output files basename
 basename = os.path.basename(args.output)
 
-iBCs = {}
+pBCs = {}
 
-# find the insulator BCs that we're using based on the insulators that are manually selected in the file without a # sign
+# find the promoter BCs that we're using
 with open(args.TRIP_BCs, 'r') as f: 
     header = f.readline()
     for line in f:
         line = line.strip().split('\t')
         if not line[0].startswith('#'):
-            iBCs[line[1]] = line[0]
+            pBCs[line[1]] = line[0]
 
 # generate regex to search sequence
 # use multiple regexes to ensure that I get as many reads as possible
 primer = '(' + args.primer + ')'
 regex1 = re.compile(primer + r'([ATCGN]+$)')
-seq_before_iBC = '(GCCCTT)'
-regex2 = re.compile(seq_before_iBC + r'([ATCGN]+$)')
+seq_before_pBC = '(GCCCTT)'
+regex2 = re.compile(seq_before_pBC + r'([ATCGN]+$)')
 
 # regex to check whether the line is a sequence
 seq_check = re.compile(r'([ATCGN]+$)')
@@ -75,24 +75,24 @@ for line in fastq_file:
     one = regex1.search(line)
     two = regex2.search(line)
     
-    # find the trip (random) barcodes and insulator barcodes (iBC)
-    # add barcodes to count dictionary if the iBC matches an insulator 
+    # find the trip (random) barcodes and promoter barcodes (pBC)
+    # add barcodes to count dictionary if the pBC matches an promoter 
     if one != None:
         seq = one.group(2)
-        iBC = seq[42:54]
+        pBC = seq[42:54]
         tBC = check_random_bc(seq[:21])
-        if iBC in iBCs.keys():
-            d_counts[(tBC, iBCs[iBC])] += 1
+        if pBC in pBCs.keys():
+            d_counts[(tBC, pBCs[pBC])] += 1
         else:
             discard_count += 1
 
     elif two != None:
-        iBC = two.group(2)[:12]
+        pBC = two.group(2)[:12]
         end_coordinate = 75 - 15 - len(two.group(0))
         seq = line[end_coordinate - 21 : end_coordinate]
         tBC = check_random_bc(seq)
-        if iBC in iBCs.keys():
-            d_counts[(tBC, iBCs[iBC])] += 1
+        if pBC in pBCs.keys():
+            d_counts[(tBC, pBCs[pBC])] += 1
         else:
             discard_count += 1
 
@@ -115,14 +115,14 @@ multiple_match_count = 0
 
 for barcodes, count in sorted_counts:
     tBC = barcodes[0]
-    iBC = barcodes[1]
+    pBC = barcodes[1]
     matched_bcs = 0
-    for existing_tBC, existing_iBC in d_collapsed_counts.keys():
-        if iBC == existing_iBC and hamdist(tBC, existing_tBC) < 3:
+    for existing_tBC, existing_pBC in d_collapsed_counts.keys():
+        if pBC == existing_pBC and hamdist(tBC, existing_tBC) < 3:
             matched_bcs += 1
             
     if matched_bcs == 0:
-        d_collapsed_counts[(tBC, iBC)] = count
+        d_collapsed_counts[(tBC, pBC)] = count
     elif matched_bcs == 1:
         discard_count += count
     else:
@@ -134,6 +134,6 @@ print('number of barcodes with multiple matches: ' + str(multiple_match_count))
 
 # write barcodes and counts to file
 with open(basename + '_counts', 'w') as f:
-    f.write('tBC\tiBC\tcount\n')
+    f.write('tBC\tpBC\tcount\n')
     for key, value in d_collapsed_counts.items():
-        f.write('{tBC}\t{iBC}\t{counts}\n'.format(tBC = key[0], iBC = key[1], counts = value))
+        f.write('{tBC}\t{pBC}\t{counts}\n'.format(tBC = key[0], pBC = key[1], counts = value))

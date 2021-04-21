@@ -21,7 +21,11 @@ positional arguments:
   Example:
 
   ```
+<<<<<<< HEAD
+  python3 Illumina_demultiplex_mapping_R1_only.py MPBC_file.txt mapping_R1_sample.fastq.gz mapping_R2_sample.fastq.gz
+=======
   python3 Illumina_demultiplex_mapping_R1_only.py MPBC_file.txt 
+>>>>>>> parent of a026744... Updated README with examples and added sample files to run the commands.
   ```
 
 2. Run bwa_align.sbatch
