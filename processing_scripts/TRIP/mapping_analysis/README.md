@@ -1,6 +1,6 @@
 These scripts are used for mapping TRIP integrations. 
 
-Before starting, make sure there is a TRIP barcodes file that contains the REVERSE COMPLEMENT barcode because the barcodes are in the R2 read. 
+Before starting, make sure there is a TRIP barcodes file that contains the REVERSE COMPLEMENT barcode because the barcodes are in the R2 read. The files needed to run these scripts are in this folder, along with sample fastq files. Full fastq files are provided in GEO.
 
 1. Demultiplex the fastq file using Illumina_demultiplex_mapping_R1_only.py
 
@@ -16,6 +16,12 @@ positional arguments:
   optional arguments:  -h, --help            show this help message and exit
   -o OUTPUT, --output OUTPUT                        output file basename
 
+  ```
+
+  Example:
+
+  ```
+  python3 Illumina_demultiplex_mapping_R1_only.py MPBC_file.txt 
   ```
 
 2. Run bwa_align.sbatch
