@@ -38,7 +38,7 @@ The sbatch file also converts the sam file to a bam file for more efficient stor
 Required python packages: pysam 
 
 ```
-usage: annotate_integrations_R1_only.py [-h] bam insulator_bcs output
+usage: annotate_integrations_R1_only.py [-h] bam promoter_bcs output
 
 Read bam file and output barcode with annotated locations
 
@@ -51,5 +51,9 @@ optional arguments:
   -h, --help     show this help message and exit
 ```
 
-This generates a bed file that I usually intersect with the chromHMM file (K562_chromHMM_05032020.bed) using bedtools to get the chromatin anntations. However this can also be done in R if preferred. 
+Example:
+
+```
+python3 annotation_integrations_R1_only.py mapping_aligned_sample.bam core_promoter_TRIP_bcs_rc.txt mapping_output_sample.txt
+```
 
