@@ -17,7 +17,7 @@ def process_fastq(fastq_file):
     """Returns 4 lines of fastq file at once"""
     current_record = {}
 
-    for name, seq, crap, quality in zip(*[iter(fastq_file)]*4):
+    for name, seq, blank, quality in zip(*[iter(fastq_file)]*4):
         current_record['name'] = name.strip('\n')
         current_record['seq'] = seq.strip('\n')
         current_record['quality'] = quality.strip('\n')
