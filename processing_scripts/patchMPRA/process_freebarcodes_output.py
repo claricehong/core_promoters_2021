@@ -5,18 +5,16 @@ import argparse
 import os
 from collections import defaultdict
 
-parser = argparse.ArgumentParser(
-    description = 'Process freebarcodes output and output counts per barcode pair')
-parser.add_argument(
-    'freebarcodes_output', help = 'decoded freebarcodes file')
-parser.add_argument(
-    '-o', '--output', help = 'output file basename')
+parser = argparse.ArgumentParser(description = 'Process freebarcodes output and output counts per barcode pair')
+parser.add_argument('freebarcodes_output', help = 'decoded freebarcodes file')
+parser.add_argument('-o', '--output', help = 'output file basename')
 args = parser.parse_args()
 
 basename = os.path.basename(args.freebarcodes_output).split('.')[0]
 
 d_counts = defaultdict(int)
 
+# obtain the gBC from the read name and count occurence of each pBC-gBC pair
 with open(args.freebarcodes_output, 'r') as f:
     for line in f:
         line = line.strip('\n').split('\t')
