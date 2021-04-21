@@ -25,7 +25,7 @@ optional arguments:
 Example: 
 
 ```
-python3 /home/hongkityeeclarice/cohen_lab/promoter_screen/freebarcodes/fastq_processing/generate_freebarcodes_input.py patchMPRA_DNA_sample.fastq.gz patchMPRA_DNA_sample_R2.fastq.gz LP_BCs -o sample_freebarcodes_input.gz
+python3 generate_freebarcodes_input.py patchMPRA_DNA_sample.fastq.gz patchMPRA_DNA_sample_R2.fastq.gz LP_BCs -o sample_freebarcodes_input.gz
 ```
 
 2. Run freebarcodes decoder. Barcode file and codebook is obtained from freebarcodes software.
