@@ -85,7 +85,7 @@ def compare_locations(loc1, loc2):
 
 d_promoter_bcs = {}
 
-# read promoter barcodes
+# read promoter barcodes and generate all barocdes one hamming distance away so that I can include barcodes that have substitutions due to either PCR or sequencing error
 with open(args.promoter_bcs, 'r') as f:
     header = f.readline()
     for line in f:
@@ -127,6 +127,8 @@ print('Number of matched barcodes: ' + str(count_matched_barcodes))
 barcode_locations = {}
 barcode_locations2 = {}
 
+# some barcode pairs will map to multiple location
+# here I'm just checking to see if I can confidently assign on of these locations to the barocde pair
 for bcs, locations in all_locations.items():
     count_items = collections.Counter(locations)
     top = count_items.most_common()
@@ -135,6 +137,7 @@ for bcs, locations in all_locations.items():
     collated_locs = {}
     collated_locs[top[0][0]] = top[0][1]
 
+    # collapse the locations that are close to the top location
     for loc, count in top:
         added = 'no'
         existing_collated_locs = [k for k, v in collated_locs.items()]
@@ -143,25 +146,20 @@ for bcs, locations in all_locations.items():
                 collated_locs[existing_loc] += count
                 added = 'yes'
         if added == 'no':
-            # elif compare_locations(existing_loc, loc) == 'far':
             collated_locs[loc] = count
 
     collated_locs_sorted = sorted(collated_locs.items(), key = lambda x: x[1], reverse = True)
     top_count = collated_locs_sorted[0][1]
 
+    # only assign location to barcode pair if the top location is at least 70% of the total reads for that location and the other locations match the filters in the check_percentage function
+    # the other reads might be spurious PCR produces and/or errors
     if top_count/total > 0.7:
         other_locs = collated_locs_sorted[1:]
         if check_all_percentages(other_locs, total, top_count) == 'good':
             barcode_locations[bcs] = collated_locs_sorted[0]
-    #     else:
-    #         print(collated_locs_sorted)
-    # else:
-    #     print(collated_locs_sorted)
-    # elif total > 100:
-    #     if top[0][0][0] == top[1][0][0]:
-    #         print(top)
-    #         print(collated_locs_sorted)
 
+# looking for random TRIP barcodes that show up more than once (i.e. different promoter but same TRIP barcode)
+# due to the random nature of the TRIP barcodes this is unlikely to happen so if it happens it's probably due to some kind of error
 all_tBCs = collections.Counter([i[1] for i in barcode_locations.keys()])
 repeat_tBCs = [k for k, v in all_tBCs.items() if v >= 2]
 repeat_barcode_locations = collections.defaultdict(list)
@@ -172,6 +170,7 @@ for bc, location in barcode_locations.items():
 
 keys_to_drop = []
 
+# keep the promoter barcode that makes up 80% of the total reads for that TRIP barcode  
 for tBC, info in repeat_barcode_locations.items():
     counts = [i[2] for i in info]
     locations = [i[1] for i in info]

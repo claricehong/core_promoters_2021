@@ -23,7 +23,7 @@ positional arguments:
 The demultiplexing file automatically generates a lookup file for input into bwa_align.sbatch for parallel processing. For other servers/non-parallel processing, run 
 
 ```
-bwa mem /home/hongkityeeclarice/cohen_lab/hg38_ensembl/hg38 <read1> > ${output}.sam
+bwa mem <path to genome> <read1> > <output>.sam
 ```
 The sbatch file also converts the sam file to a bam file for more efficient storage. 
 
@@ -38,12 +38,12 @@ Read bam file and output barcode with annotated locations
 
 positional arguments:
   bam            bamfile
-  insulator_bcs  insulator BC file
+  promoter_bcs   promoter BC file
   output         output file name
 
 optional arguments:
   -h, --help     show this help message and exit
 ```
 
-This generates a bed file that I usually intersect with the chromHMM file (K562_chromHMM_05032020.bed) using bedtools to get the chromatin anntations. 
+This generates a bed file that I usually intersect with the chromHMM file (K562_chromHMM_05032020.bed) using bedtools to get the chromatin anntations. However this can also be done in R if preferred. 
 
