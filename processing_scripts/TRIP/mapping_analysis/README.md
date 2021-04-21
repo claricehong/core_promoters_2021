@@ -13,8 +13,10 @@ positional arguments:
   mpBC                  file containing multiplexing barcodes
   fastq_R1              input fastq file R1  
   fastq_R2              input fastq file R2
-  optional arguments:  -h, --help            show this help message and exit
-  -o OUTPUT, --output OUTPUT                        output file basename
+  optional arguments:  
+  -h, --help            show this help message and exit
+  -o OUTPUT, --output OUTPUT                        
+                        output file basename
 
   ```
 
