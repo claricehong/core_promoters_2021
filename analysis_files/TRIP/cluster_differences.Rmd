@@ -1,0 +1,362 @@
+---
+title: "cluster epigenome and seq differences"
+output: html_document
+---
+
+```{r}
+library(BSgenome.Hsapiens.NCBI.GRCh38)
+library(reticulate)
+library(colorspace)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+```
+
+```{r}
+reorder_clusters = function(df){
+  df %>%
+      mutate(cluster = factor(cluster, levels = c('low', 'medium', 'high')))
+}
+```
+
+```{r}
+add_cluster_colour = function(){
+    list(
+      scale_fill_manual(values = c('#784b91', '#d35658', '#f4e76c')),
+      theme(legend.position = 'none'),
+      xlab('')
+    )
+}
+```
+
+Clusters seq features
+
+```{r}
+low_granges_NCBI =
+    all_clusters %>%
+        filter(cluster == 'low') %>%
+        separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+        makeGRangesFromDataFrame()
+
+medium_granges_NCBI =
+    all_clusters %>%
+        filter(cluster == 'medium') %>%
+        separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+        makeGRangesFromDataFrame()
+
+high_granges_NCBI =
+    all_clusters %>%
+        filter(cluster == 'high') %>%
+        separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+        makeGRangesFromDataFrame()
+```
+
+```{r}
+high_seqs = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, high_granges_NCBI)
+medium_seqs = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, medium_granges_NCBI)
+low_seqs = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, low_granges_NCBI)
+
+names(high_seqs) = paste0('high_', 1:306)
+names(medium_seqs) = paste0('medium_', 1:671)
+names(low_seqs) = paste0('low_', 1:301)
+
+writeXStringSet(high_seqs, 'gkmSVM/high_seqs_core.fa')
+writeXStringSet(medium_seqs, 'gkmSVM/medium_seqs_core.fa')
+writeXStringSet(low_seqs, 'gkmSVM/low_seqs_core.fa')
+```
+
+```{r}
+random1 = all_clusters %>%
+    sample_n(306)
+
+random2 = all_clusters %>%
+    anti_join(random1) %>%
+    sample_n(671)
+
+inner_join(random1, random2) %>%
+    nrow()
+
+random1_granges_NCBI = random1 %>%
+    separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+    makeGRangesFromDataFrame()
+
+random2_granges_NCBI = random2 %>%
+    separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+    makeGRangesFromDataFrame()
+```
+
+```{r}
+random1_seqs = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, random1_granges_NCBI)
+random2_seqs = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, random2_granges_NCBI)
+
+names(random1_seqs) = paste0('random1_', 1:nrow(random1))
+names(random2_seqs) = paste0('random2_', 1:nrow(random2))
+
+writeXStringSet(random1_seqs, 'gkmSVM/random1_seqs.fa')
+writeXStringSet(random2_seqs, 'gkmSVM/random2_seqs.fa')
+```
+
+CG content
+
+```{python}
+def count_CG(seq):
+
+    count = 0
+    
+    dinucleotides = [seq[i:i+2] for i in range(0, len(seq))]
+    
+    # for dinuc in dinucleotides:
+    #     if dinuc == 'CG' or dinuc == 'CC':
+    #         count += 1
+    # 
+    # return count/len(dinucleotides)
+    for base in seq:
+        if base == 'C' or base == 'G':
+            count += 1
+    return count/len(seq)
+```
+
+```{python}
+def openfile_and_count(file):
+    output = {}
+    current_seq = ''
+    with open(file, 'r') as f:
+        for line in f:
+            if line.startswith('>'):
+                if current_seq != '':
+                    output[current_seq] = count_CG(current_seq)
+                current_seq = ''
+            else:
+                line = line.strip('\n')
+                current_seq += line
+    return output
+```
+
+```{python}
+high_CG = openfile_and_count('gkmSVM/high_seqs_core.fa')
+medium_CG = openfile_and_count('gkmSVM/medium_seqs_core.fa')
+low_CG = openfile_and_count('gkmSVM/low_seqs_core.fa')
+```
+
+```{r}
+bind_rows(
+    as_tibble(py$high_CG) %>%
+    pivot_longer(cols = colnames(.), names_to = 'seq', values_to = 'CG') %>%
+    mutate(cluster = 'high') %>%
+    filter(CG != 0),
+    as_tibble(py$medium_CG) %>%
+    pivot_longer(cols = colnames(.), names_to = 'seq', values_to = 'CG') %>%
+    mutate(cluster = 'medium'),
+    as_tibble(py$low_CG) %>%
+    pivot_longer(cols = colnames(.), names_to = 'seq', values_to = 'CG') %>%
+    mutate(cluster = 'low')
+) %>%
+    reorder_clusters() %>%
+    ggplot(aes(cluster, CG, fill = cluster)) +
+    geom_violin() +
+    geom_boxplot(width = 0.1, fill = 'white') +
+    pretty_theme() +
+    add_cluster_colour() +
+    theme(text = element_text(size = 22)) +
+    xlab('') +
+    ylab('CG content')
+    # filter(cluster != 'high') %>%
+    # ggstatsplot::ggbetweenstats(data = .,
+    #                             x = cluster,
+    #                             y = CG,
+    #                             pairwise.comparisons = TRUE
+    #                             )
+
+ggsave('cluster_annotations/CG content.pdf', width = 5.5, height = 5.5)
+```
+
+CAGE transcriptional activity between the two clusters? 
+
+```{r message=F}
+ctss_counts = read_tsv("../../../Promoter Screen/Native promoter expression levels/K562_CAGE_hg38.nobarcode.ctss", col_names = c('chrom', 'start', 'crap1', 'crap2', 'count', 'crap3')) %>%
+    select(-contains('crap')) %>%
+    makeGRangesFromDataFrame(end.field = 'start', keep.extra.columns = T)
+```
+
+```{r}
+clusters_ctss_overlap = findOverlaps(all_clusters_granges, ctss_counts, select = 'all')
+```
+
+```{r}
+clusters_cage_count =
+    as_tibble(all_clusters_granges[queryHits(clusters_ctss_overlap)]) %>%
+    select(-strand, -width) %>%
+    bind_cols(as_tibble(ctss_counts[subjectHits(clusters_ctss_overlap)]) %>%
+                select(count)) %>%
+    group_by(cluster, loc_id) %>%
+    summarise(summed_cage = sum(count)) %>%
+    right_join(all_clusters) %>%
+    mutate(summed_cage = replace_na(summed_cage, 1))
+```
+
+```{r}
+clusters_cage_count %>%
+    reorder_clusters() %>%
+    mutate(CAGE = log2(summed_cage)) %>%
+    # distinct(cluster, summed_cage) %>%
+    # ggplot(aes(cluster, log2(summed_cage), fill = cluster)) + 
+    # geom_violin() +
+    # geom_boxplot(width = 0.1, fill = 'white') +
+    # pretty_theme() + 
+    # xlab('') +
+    # ylab('CAGE signal') +
+    # theme(text = element_text(size = 20)) +
+    # add_cluster_colour() +
+    filter(cluster != 'low') %>%
+    ggstatsplot::ggbetweenstats(data = .,
+                                x = cluster,
+                                y = CAGE
+                                )
+
+# ggsave('cluster_annotations/CAGE.pdf', dpi = 600, width = 5.5, height = 5.5)
+```
+
+FIMO clusters 
+
+```{r}
+fimo_files = fs::dir_ls(path = 'clusters_fimo/', glob = '*fimo.tsv') %>%
+    as.character() %>%
+    purrr::set_names(function(x) {
+    str_sub(fs::path_file(x), end = - str_length('_fimo.tsv') - 1)
+  })
+```
+
+```{r}
+read_fimo_files = function(df){
+  read_tsv(df, comment = '#') %>%
+      count(sequence_name, motif_id) %>%
+      group_by(sequence_name) %>%
+      summarise(n = sum(n))
+      # count(sequence_name)
+}
+```
+
+```{r message=F}
+fimo_dfs = fimo_files %>% 
+    map(~ read_fimo_files(.x))
+```
+
+```{r}
+bind_rows(fimo_dfs$low %>% mutate(cluster = 'low'),
+          fimo_dfs$medium %>% mutate(cluster = 'medium'),
+          fimo_dfs$high %>% mutate(cluster = 'high')) %>%
+    reorder_clusters() %>%
+    ggplot(aes(cluster, n, fill = cluster)) +
+    geom_violin() +
+    pretty_theme() +#
+    add_cluster_colour() +
+    geom_boxplot(width = 0.1, fill = 'white')
+    # filter(cluster != 'high') %>%
+    # ggstatsplot::ggbetweenstats(data = .,
+    #                             x = cluster,
+    #                             y = n
+    #                             )
+
+ggsave('cluster_annotations/clusters fimo motif score.pdf', width = 5.5, height = 5.5)
+```
+
+Heterochromatin (H3K27me3)
+
+```{r message=F}
+H3K27me3_peaks = read_tsv("../../../TRIP/TRIP experiments/TRIP v2/K562_H3K27me3.narrowPeak",
+                col_names = c('chr', 'start', 'stop', 'crap1', 'score', 'crap3', 'crap4',
+                            'crap5', 'crap6', 'crap7')) %>%
+    select(-contains('crap'))
+
+H3K27me3_granges = makeGRangesFromDataFrame(H3K27me3_peaks, keep.extra.columns = T)
+```
+
+```{r}
+all_clusters_H3K27me3_overlap = findOverlaps(all_clusters_granges, H3K27me3_granges)
+
+all_clusters_H3K27me3_overlap =
+    bind_cols(
+    as_tibble(all_clusters_granges[queryHits(all_clusters_H3K27me3_overlap)]) %>%
+        select(-strand, -start, -end) %>%
+        dplyr::rename('loc_width' = 'width'),
+    as_tibble(H3K27me3_granges[subjectHits(all_clusters_H3K27me3_overlap)]) %>%
+        select(score)) %>%
+    right_join(all_clusters) %>%
+    group_by(cluster, loc_id) %>%
+    summarise(score = sum(score)) %>%
+    # mutate(score = replace_na(score, 1)) %>%
+    mutate(H3K27me3 = case_when(
+        is.na(score) ~ 'False',
+        TRUE ~ 'True'
+    ))
+```
+
+```{r}
+ all_clusters_H3K27me3_overlap %>%
+    reorder_clusters() %>%
+    mutate(H3K27me3 = factor(H3K27me3, levels = c('True', 'False')),
+           cross = fct_cross(cluster, H3K27me3)) %>%
+    ggplot(aes(cluster, fill = cross)) +
+    geom_bar(position = 'dodge', colour = 'black') +
+    pretty_theme() +
+    scale_y_continuous(expand = c(0,0), limits = c(0, 650)) +
+    scale_fill_manual(values = c('#a081b2', '#784b91', '#e0888a', '#d35658', '#fbf7d2', '#f4e76c')) +
+    xlab('') +
+    labs(fill = 'H3K27me3', size = 20) +
+    theme(legend.position = 'none')
+    
+
+ggsave('cluster_annotations/H3K27me3 count.pdf', dpi = 600, width = 5 , height = 5)
+```
+
+H3K9me3
+
+```{r message=F}
+H3K9me3 = read_tsv('../../Genome annotations/Histone modifications/H3K9me3_hg38_narrowPeaks.bed.gz', 
+                   col_names = c('chrom', 'start', 'stop', 'crap1', 'score', 'crap2', 'crap3', 'crap4', 'crap5', 'crap6')) %>%
+  select(-contains('crap')) %>%
+            makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+all_clusters_H3K9me3_overlap = findOverlaps(all_clusters_granges, H3K9me3)
+
+all_clusters_H3K9me3_overlap =
+    bind_cols(
+    as_tibble(all_clusters_granges[queryHits(all_clusters_H3K9me3_overlap)]) %>%
+        select(-strand, -start, -end) %>%
+        dplyr::rename('loc_width' = 'width'),
+    as_tibble(H3K9me3[subjectHits(all_clusters_H3K9me3_overlap)]) %>%
+        select(score)) %>%
+    right_join(all_clusters) %>%
+    group_by(cluster, loc_id) %>%
+    summarise(score = sum(score)) %>%
+    # mutate(score = replace_na(score, 1)) %>%
+    mutate(H3K9me3 = case_when(
+        is.na(score) ~ 'False',
+        TRUE ~ 'True'
+    ))
+```
+
+```{r}
+all_clusters_H3K9me3_overlap %>%
+    reorder_clusters() %>%
+    mutate(H3K9me3 = factor(H3K9me3, levels = c('True', 'False')),
+           cross = fct_cross(cluster, H3K9me3)) %>%
+    ggplot(aes(cluster, fill = cross)) +
+    geom_bar(position = 'dodge', colour = 'black') +
+    pretty_theme() +
+    scale_y_continuous(expand = c(0,0), limits = c(0, 700)) +
+    scale_fill_manual(values = c('#a081b2', '#784b91', '#e0888a', '#d35658', '#fbf7d2', '#f4e76c')) +
+    xlab('') +
+    labs(fill = 'H3K9me3', size = 20) +
+    theme(legend.position = 'none')
+    
+
+ggsave('cluster_annotations/H3K9me3 count.pdf', dpi = 600, width = 5 , height = 5)
+```
+
+
+

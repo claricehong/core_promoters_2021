@@ -1,0 +1,490 @@
+---
+title: "LVLP library"
+output: html_document
+---
+
+```{r message=F}
+library(ggpubr)
+library(deming)
+library(GGally)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+pretty_theme <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), text = element_text(size=24), panel.border = element_blank(), axis.line = element_line(colour = "black"))
+}
+
+pretty_theme_facet <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), text = element_text(size=24), strip.background = element_blank(),
+   panel.border = element_rect(colour="black"))
+}
+```
+
+```{r}
+get_correlation = function(data1, data2){
+  signif(cor.test(data1, data2)$estimate, 2)
+}
+```
+
+```{r}
+all_barcodes <- read.table("../../Library/Library design/promoter library barcodes long.txt") %>%
+  rename('promoter' = 'V1', 'pBC' = 'V2')
+```
+
+```{r, message=F}
+plasmid_R1 = read_tsv("plasmid_R1_counts.txt", col_names = c('pBC', 'count')) %>%
+    inner_join(all_barcodes, by = 'pBC') %>%
+    filter(count > 10) %>%
+    mutate(norm_count = count/555943*1000000)
+
+plasmid_R2 = read_tsv("plasmid_R2_counts.txt", col_names = c('pBC', 'count')) %>%
+    inner_join(all_barcodes, by = 'pBC') %>%
+    filter(count > 10) %>%
+    mutate(norm_count = count/506178*1000000)
+
+RNA_R1 = read_tsv("RNA_R1_counts.txt", col_names = c('pBC', 'count')) %>%
+    inner_join(all_barcodes, by = 'pBC') %>%
+    filter(count > 10) %>%
+    mutate(norm_count = count/441030*1000000)
+
+RNA_R2 = read_tsv("RNA_R2_counts.txt", col_names = c('pBC', 'count')) %>%
+    inner_join(all_barcodes, by = 'pBC') %>%
+    filter(count > 10) %>%
+    mutate(norm_count = count/554829*1000000)
+```
+
+```{r}
+inner_join(RNA_R1, RNA_R2, by = c('pBC', 'promoter')) %>%
+    ggplot(aes(log2(count.x), log2(count.y))) + 
+    geom_point()
+```
+
+```{r}
+calculate_expression <- function(RNA, DNA){
+
+  inner_join(DNA, RNA, by = c('pBC', 'promoter')) %>%
+    mutate('exp' = log2(norm_count.y/(norm_count.x ))) %>%
+    select(-contains('count'))
+}
+```
+
+```{r}
+exp_R1 = calculate_expression(RNA_R1, plasmid_R1)
+exp_R2 = calculate_expression(RNA_R2, plasmid_R2)
+```
+
+```{r}
+inner_join(exp_R1, exp_R2, by = c('pBC', 'promoter')) %>%
+    ggplot(aes(exp.x, exp.y)) + 
+    geom_point() + pretty_theme()
+```
+
+```{r message=F}
+promoter_annotations_tbl <- read_tsv('../../Library/Library design/promoter library sequences with annotation.txt') %>%
+  select(one_of(c('sequence', 'housekeeping_vs_developmental', 'initiation_type',
+                  'TATAbox_CP', 'TATAbox_motif_score', 'CpG_island_CP','oligo_id', 'Initiator_motif_score')), starts_with('class')) %>%
+  mutate('TATAbox_CP' = as.factor(TATAbox_CP), 'CpG_island_CP' = as.factor(CpG_island_CP)) 
+```
+
+```{r}
+combine_promoter_barcodes <- function(measured){
+    measured %>%
+    group_by(promoter) %>%
+    summarise(avg = mean(exp)) %>%
+    inner_join(promoter_annotations_tbl, by = c('promoter' = 'sequence'))
+  
+}
+```
+
+```{r}
+exp_by_techrep = list(R1 = exp_R1, R2 = exp_R2)
+```
+
+```{r}
+promoter_exp_by_techrep = exp_by_techrep %>%
+    map(combine_promoter_barcodes)
+```
+
+```{r}
+inner_join(promoter_exp_by_techrep$R1, promoter_exp_by_techrep$R2, by = c('promoter', 'housekeeping_vs_developmental')) %>%
+    ggplot(aes(avg.x, avg.y)) + 
+    geom_point() +
+    pretty_theme() + 
+    ylab('Rep2') +
+    xlab('Rep1')
+```
+```{r, message=F}
+V2_CC_LP = read_tsv("../../Combined Analysis/V2 correct +CRE expression.txt") %>% 
+    inner_join(promoter_annotations_tbl, by = c('promoter' = 'sequence')) %>%
+    select(promoter, mean_exp, LP, oligo_id)
+```
+
+```{r, warning=F}
+LVLP_exp =
+    inner_join(exp_R1, exp_R2, by = c('pBC', 'promoter')) %>%
+    mutate(exp = rowMeans(select(., starts_with("exp")), na.rm = TRUE)) %>%
+    select(-contains('.')) %>%
+    combine_promoter_barcodes() %>%
+    inner_join(V2_CC_LP, by = c('promoter', 'oligo_id'))
+```
+
+```{r}
+common_annotations = c('promoter', 
+                              'housekeeping_vs_developmental',
+                              'initiation_type',
+                              'TATAbox_CP', 
+                              'TATAbox_motif_score', 'class',
+                              'Initiator_motif_score',
+                              'CpG_island_CP','oligo_id', 'class1', 'class2', 'class3',
+                              'class4', 'class5', 'class6', 'class7')
+```
+
+```{r}
+inner_join(CC_promoter_exp, LVLP_exp, by = common_annotations) %>%
+    ggplot(aes(avg.x, avg.y, col = class)) +
+    geom_point() +
+    pretty_theme()
+```
+
+```{r}
+LPs = c('LP3', 'LP4', 'LP5', 'LP6')
+
+get_LP_plasmid_correlations = function(selected_LP, dataset){
+  
+  tmp = dataset %>%
+        filter(LP == selected_LP)
+
+  cor_df = data.frame(LP = selected_LP, 
+                      correlation = (paste("r2 =", 
+                          signif((cor.test(tmp$mean_exp, tmp$avg)$estimate)**2, 2))))
+
+  return(cor_df)
+}
+```
+
+```{r}
+correlation_df = LPs %>%
+  map(~ get_LP_plasmid_correlations(., LVLP_exp)) %>%
+  reduce(., bind_rows)
+
+LVLP_exp %>%
+  # filter(!grepl('4', class)) %>%
+    filter(LP == 'LP4') %>%
+    ggplot(aes(mean_exp, avg)) +
+    geom_jitter() +
+    pretty_theme() +
+    # facet_wrap(~ LP, nrow = 1) +
+    # xlim(-4.4, 4) +
+    # ylim(-4.4, 4) +
+    ylab('log2(plasmid exp)') +
+    xlab('log2(LP exp)') +
+    # geom_smooth(method = 'lm', colour = 'gray') +
+    # theme(legend.position = 'None') +
+    # geom_point(data = CC_LP_plasmid_exp %>% filter(class == 'class3and4'), aes(avg, mean_exp), colour = 'blue') +
+    geom_text(data = correlation_df %>% filter(LP == 'LP4'), aes(x = -3, y = 3, label = correlation), size = 5, colour = 'black') +
+    # xlab('log2(LP4 exp)')
+
+
+ggsave('LP4 plasmid correlations.pdf', height = 4, width = 4)
+```
+
+```{r}
+LVLP_exp %>%
+    filter(LP == 'LP3') %>%
+    ggplot(aes(mean_exp, avg)) +
+    geom_point() +
+    pretty_theme_facet() +
+    facet_wrap(~ class)
+```
+
+```{r}
+LVLP_exp %>%
+    filter(grepl('1|5', class)) %>%
+   mutate(class_name = case_when(
+      class == 'class1' ~ 'TATA',
+      class == 'class5' ~ 'DPE'
+    )) %>%
+  filter(! is.na(class_name)) %>%
+  mutate(class_name = factor(class_name, levels = c('TATA', 'DPE'))) %>%
+  ggplot(aes(class_name, avg, fill = class_name)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c('#EAF8BF', '#916C80')) +
+  pretty_theme_facet() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        title = element_text(size = 17)) +
+  ylim(-1.2, 4) +
+  ylab('log2(exp)') +
+  xlab('') +
+  ggtitle('plasmid')
+```
+
+```{r}
+LVLP_exp %>%
+    filter(LP == 'LP3') %>%
+    filter(is.na(housekeeping_vs_developmental)) %>%
+    select(oligo_id, avg) %>%
+    pivot_wider(names_from = oligo_id, values_from = avg) %>%
+    mutate(SCP1_norm = 2**(SCP1-SCP1), mTATA_norm = 2**(SCP1_mTATA - SCP1), mDPE_norm = 2**(SCP1_mDPE - SCP1), mboth_norm = 2**(SCP1_mboth - SCP1)) %>%
+    select(contains('norm')) %>%
+    pivot_longer(cols = contains('norm'), names_to = 'oligo_id', values_to = 'norm_exp') %>%
+    mutate(oligo_id = factor(oligo_id, levels = c('SCP1_norm', 'mTATA_norm', 'mDPE_norm', 'mboth_norm'))) %>%
+    ggplot(aes(oligo_id, norm_exp)) +
+    geom_col(fill = 'pink', colour = 'black') +
+    pretty_theme() +
+    # geom_errorbar(aes(ymin = mean_exp, ymax = mean_exp - exp_var)) +
+    # theme(text = element_text(size = 14)) +
+    scale_y_continuous(expand = c(0,0), limits = c(0, 1.07)) +
+    scale_x_discrete(labels = c('SCP1_norm' = 'SCP1', 'mTATA_norm' = 'mTATA', 'mDPE_norm' = 'mDPE', 'mboth_norm' = 'mBoth')) +
+    ylab('Relative expression')
+```
+
+```{r}
+plasmid_model = lm(mean_exp ~ LP + avg, data = LVLP_exp)
+
+summary(plasmid_model)
+anova_plasmid = anova(plasmid_model)
+anova_sum_squares = anova_plasmid$"Sum Sq"
+cbind(anova_plasmid, 
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100) 
+
+summary(plasmid_model)$adj.r.squared
+
+LVLP_exp %>%
+    mutate(predicted = predict(plasmid_model, newdata = LVLP_exp)) %>%
+    ggplot(aes(mean_exp, predicted)) +
+    geom_point() +
+    pretty_theme() +
+    xlab('measured genomic expression') +
+    ylab('predicted genomic expression')
+
+ggsave('plasmid model prediction.pdf', width = 5, height = 4)
+```
+
+```{r}
+quartiled = LVLP_exp %>%
+    filter(LP == 'LP3') %>%
+    mutate(rank = ntile(avg, 2)) %>%
+    mutate(rank = paste('quartile ', rank)) %>%
+    select(oligo_id, rank)
+
+quartile_model_input = inner_join(LVLP_exp, quartiled, by = 'oligo_id')
+
+quartile_model = lm(mean_exp ~ LP:rank + avg, data = quartile_model_input)
+summary(quartile_model)$adj.r.squared
+anova(plasmid_model, quartile_model)
+```
+
+```{r}
+LVLP_exp %>%
+    filter(LP == 'LP3') %>%
+    mutate(Inr_vs_TCT = case_when(
+        Initiator_motif_score > 90 ~ 'Inr',
+        class == 'class4' | class == 'class3and4' ~ 'TCT'
+    )) %>%
+    filter(!is.na(Inr_vs_TCT)) %>%
+    # count(Inr_vs_TCT)
+    ggplot(aes(Inr_vs_TCT, avg, fill = Inr_vs_TCT)) +
+    geom_boxplot() +
+    pretty_theme_facet() +
+    ylab('log2(exp)') +
+    scale_fill_manual(values = c('#B3D6C6', '#E26D5A')) +
+    theme(legend.position = 'None',
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          title = element_text(size = 17)) +
+    ggtitle('plasmid') +
+    ylim(-0.9, 4.5) +
+    xlab('')
+```
+
+```{r}
+LVLP_exp %>%
+    filter(!grepl('and', class)) %>%
+    ggplot(aes(class, avg)) +
+    geom_boxplot() +
+    pretty_theme()
+```
+
+```{r}
+LVLP_exp %>%
+    filter(!grepl('and', class)) %>%
+    ggplot(aes(class, mean_exp)) +
+    geom_boxplot() +
+    pretty_theme_facet() +
+    facet_wrap(~LP)
+```
+
+```{r}
+native_scores <- read.csv("../../Native promoter expression levels/library promoters summed tagcounts.txt", sep = '\t') %>% select(one_of('oligo_id', 'score'))
+```
+
+
+```{r}
+LVLP_exp_native = 
+    left_join(LVLP_exp, native_scores, by = 'oligo_id') %>%
+    # filter(LP == 'LP3') %>%
+    mutate(native = case_when(
+        is.na(score) ~ 'not expressed',
+        TRUE ~ 'expressed'
+    )) 
+
+LVLP_exp_native %>%
+    filter(LP == 'LP3') %>%
+    ggplot(aes(native, fill = housekeeping_vs_developmental)) +
+    geom_bar() +
+    pretty_theme() +
+    theme(legend.position = 'none')
+```
+
+
+```{r}
+LVLP_exp_native %>%
+    filter(LP == 'LP3') %>%
+    filter(housekeeping_vs_developmental == 'dev') %>%
+    ggplot(aes(native, avg)) +
+    geom_boxplot() +
+    geom_jitter() +
+    pretty_theme()
+```
+
+```{r}
+get_native_correlations = function(selected_LP, dataset){
+  
+  tmp = dataset %>%
+    filter(LP == selected_LP)
+
+  tmp_native = tmp %>% filter(native == 'expressed') 
+  tmp_nonnative = tmp %>% filter(native == 'not expressed')
+  
+  cor_df = data.frame(native = c('expressed', 'not expressed'), 
+                      LP = c(selected_LP, selected_LP),
+                      correlation = (paste("r =", c(
+                        get_correlation(tmp_native$mean_exp, tmp_native$avg),
+                        get_correlation(tmp_nonnative$mean_exp, tmp_nonnative$avg))))) 
+}
+```
+
+```{r}
+correlation_df = LPs %>%
+  map(~ get_native_correlations(., LVLP_exp_native)) %>%
+  reduce(., bind_rows)
+  
+LVLP_exp_native %>%
+    ggplot(aes(avg, mean_exp)) +
+    geom_smooth(method = 'lm', colour = 'gray') +
+    geom_point() +
+    pretty_theme_facet() +
+    facet_grid(native ~ LP) +
+    # xlim(-4.4, 4) +
+    # ylim(-4.4, 4) +
+    xlab('LP') +
+    ylab('plasmid') +
+    geom_text(data = correlation_df, aes(x = -0.5, y = 3.3, label = correlation), size = 5) 
+```
+
+```{r}
+LVLP_exp %>%
+  filter(LP == 'LP3') %>%
+  filter(is.na(housekeeping_vs_developmental)) %>%
+  select(oligo_id, avg) %>%
+  pivot_wider(names_from = oligo_id, values_from = avg) %>%
+  mutate(SCP1_norm = 2**(SCP1-SCP1), mTATA_norm = 2**(SCP1_mTATA - SCP1), mDPE_norm = 2**(SCP1_mDPE - SCP1), mboth_norm = 2**(SCP1_mboth - SCP1)) %>%
+  select(contains('norm')) %>%
+  pivot_longer(cols = contains('norm'), names_to = 'oligo_id', values_to = 'norm_exp') %>%
+  mutate(oligo_id = factor(oligo_id, levels = c('SCP1_norm', 'mTATA_norm', 'mDPE_norm', 'mboth_norm'))) %>%
+  ggplot(aes(oligo_id, norm_exp)) +
+  geom_col(fill = 'pink', colour = 'black') +
+  pretty_theme() +
+  # geom_errorbar(aes(ymin = mean_exp, ymax = mean_exp - exp_var)) +
+  # theme(text = element_text(size = 14)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 1.07)) +
+  scale_x_discrete(labels = c('SCP1_norm' = 'SCP1', 'mTATA_norm' = 'mTATA', 'mDPE_norm' = 'mDPE', 'mboth_norm' = 'mBoth')) +
+  ylab('Relative expression')
+```
+
+```{r}
+LVLP_exp_native %>%
+    ggplot(aes(avg, log2(score))) +
+    geom_point() +
+    pretty_theme_facet() +
+    facet_grid(housekeeping_vs_developmental ~ LP)
+```
+
+```{r}
+stark_data <- read.csv("../../Library/Library design/GSE126221_Normalized_tagcounts_per_oligo_merged_reps.txt", sep = '\t') %>%
+  select(one_of(c('oligo_id', 'GFP'))) %>%
+  mutate(GFP = case_when(
+    GFP == 0 ~ 0.01, 
+    TRUE ~ GFP
+  )
+  ) %>%
+  mutate(logGFP = log2(GFP))
+```
+
+```{r}
+tmp = inner_join(LVLP_exp, stark_data) 
+
+correlation = signif(cor.test(tmp$avg, tmp$logGFP)$estimate, 2)
+
+tmp %>%
+    ggplot(aes(avg, log2(GFP))) + 
+    geom_point() + 
+    pretty_theme() + 
+    annotate("text",x = -0.2, y = 9, label = paste('r =', correlation), size = 5) + 
+    xlab('+CRE (K562)') + 
+    ylab('Stark (HCT116)')
+```
+
+SuRE score is barely correlated lol
+
+```{r message=F}
+sure_data = read_tsv('../../SuRE supplemental data/sure_data_scores.tsv')
+```
+
+```{r}
+inner_join(LVLP_exp, sure_data) %>%
+  filter(LP == 'LP3') %>%
+  ggplot(aes(avg, log2(sure_score), col = major_TSS)) + 
+  geom_point() +
+  facet_grid(LP ~ housekeeping_vs_developmental) + 
+  pretty_theme_facet() 
+```
+
+```{r}
+promoter_annotations_tbl %>%
+    select(oligo_id) %>%
+    filter(!grepl('SCP1', oligo_id)) %>%
+    separate(oligo_id, into = c('chr', 'start', 'stop', 'strand'), sep = '_') %>%
+    write_tsv('../../oligo_ids.bed')
+```
+
+```{r}
+tmp = LVLP_exp %>%
+    distinct(oligo_id, avg) %>%
+    select(oligo_id, avg) %>%
+    dplyr::rename('plasmid_exp' = 'avg') 
+
+write_tsv(tmp, file = '../../Draft/Supplemental Files/Plasmid expression.tsv')
+```
+
+```{r message=F}
+chiapet_loops = read_tsv('../../Putative enhancers/PolII ChIA-PET/promoter library chia-pet loops.tsv')
+```
+
+```{r}
+LVLP_exp %>%
+    distinct(oligo_id, avg) %>%
+    inner_join(chiapet_loops) %>%
+    mutate(looping = case_when(
+        num_loops < 5 ~ 'low',
+        TRUE ~ 'high'
+    )) %>%
+    ggplot(aes(looping, avg)) +
+    geom_boxplot() +
+    pretty_theme()
+```
+

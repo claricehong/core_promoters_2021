@@ -1,0 +1,157 @@
+---
+title: "find integrations near hkdev"
+output: html_document
+---
+
+```{r message=F}
+library(GenomicRanges)
+library(reticulate)
+library(tidyverse)
+```
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+```
+
+```{r message=F}
+hk_genes = read_tsv('../../Genome annotations/CDS/HK_genes.txt',
+                    col_names = c('gene_name', 'refseq_id')) %>%
+            mutate(hk_dev = 'hk') %>%
+            select(-refseq_id)
+```
+
+```{r message=F}
+expressed_genes =
+    read_tsv('../../Genome annotations/RNA-seq/K562 rna-seq long pA RNA.tsv', 
+             skip = 5,
+             col_names = c('gene_id', 'gene_name', 'exp')) %>%
+    filter(exp > 1) %>%
+    mutate(exp_level = case_when(
+        log2(exp) > 5 ~ 'high',
+        log2(exp) < 3 ~ 'low'
+)) 
+```
+
+```{r}
+expressed_genes %>%
+    ggplot(aes(log2(exp))) +
+    geom_density() +
+    pretty_theme()
+```
+
+```{r message=F}
+hk_dev_gene_locs =
+    read_tsv('../../Genome annotations/CDS/GRCh38 genes.tsv') %>%
+    inner_join(expressed_genes) %>%
+    left_join(hk_genes) %>%
+    mutate(hk_dev = case_when(
+        is.na(hk_dev) ~ 'dev',
+        TRUE ~ 'hk'
+    )) %>%
+    mutate(actual_start = case_when(
+        strand == '+' ~ start,
+        strand == '-' ~ end
+    )) %>%
+    select(-start, -end)
+```
+
+```{r}
+hk_dev_gene_locs
+```
+
+
+```{python}
+import itertools
+from collections import defaultdict
+import pandas as pd
+```
+
+```{python}
+d_all_mapped = defaultdict(list)
+
+for idx, row in r.all_mapped.iterrows():
+    if row['iBC'] != 'CRE-hk1' and row['iBC'] != 'hsp68':
+        d_all_mapped[row['chr']].append((row['tBC'], row['iBC'], row['location']))
+```
+
+```{python}
+d_hkdev_gene_locs = defaultdict(list)
+
+for idx, row in r.hk_dev_gene_locs.iterrows():
+    d_hkdev_gene_locs[row['chrom']].append((row['actual_start'], row['hk_dev'], row['exp_level']))
+```
+
+```{python}
+hk_barcodes = []
+dev_barcodes = []
+
+for chrom, mapped_locs in d_all_mapped.items():
+    gene_locs = d_hkdev_gene_locs[chrom]
+    for loc in mapped_locs:
+        for gene_loc in gene_locs:
+            if abs(int(loc[2]) - int(gene_loc[0])) < 5000:
+                if gene_loc[1] == 'hk':
+                    hk_barcodes.append(loc[:2])
+                elif gene_loc[1] == 'dev':
+                    dev_barcodes.append(loc[:2])
+                    
+sys.stdout.flush()
+```
+
+```{python}
+hk_barcodes_df = pd.DataFrame(hk_barcodes, columns = ['tBC', 'iBC'])
+dev_barcodes_df = pd.DataFrame(dev_barcodes, columns = ['tBC', 'iBC'])
+```
+
+```{r}
+unique_hk = anti_join(py$hk_barcodes_df, py$dev_barcodes_df) %>%
+    left_join(all_mapped) %>%
+    mutate(hkdev = 'hk')
+unique_dev = anti_join(py$dev_barcodes_df, py$hk_barcodes_df) %>%
+    left_join(all_mapped) %>%
+    mutate(hkdev = 'dev')
+
+all_mapped_close_to_hkdev = bind_rows(unique_hk, unique_dev) %>%
+    mutate(iBC = factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1')))
+```
+
+```{r}
+all_mapped_close_to_hkdev %>%
+    mutate(hkdev = factor(hkdev, levels = c('hk', 'dev'))) %>%
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    geom_violin() +
+    geom_boxplot(width = 0.1, fill = 'white') +
+    pretty_theme_facet() +
+    scale_fill_manual(values = prom_colours) +
+    facet_wrap(~ hkdev, nrow = 1) +
+    xlab('') +
+    ylab('log2(exp)') +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank()) +
+    ylim(-8, 6.7)
+    # theme(legend.position = 'none') +
+    # labs(fill = 'Promoter')
+
+ggsave('figures/integrations near hkdev genes.pdf', width = 10)
+```
+```{r}
+calculate_hkdev_sig = function(df){
+    hk = filter(df, hkdev == 'hk')
+    dev = filter(df, hkdev == 'dev')
+    
+    t.test(hk$exp, dev$exp)$p.value
+}
+```
+
+
+```{r}
+all_mapped_close_to_hkdev %>%
+    mutate(hkdev = factor(hkdev, levels = c('hk', 'dev'))) %>%
+    split(.$iBC) %>%
+    map(~ calculate_hkdev_sig(.x))
+```
+
+```{r}
+all_mapped_close_to_hkdev %>%
+    split(.$hkdev) %>%
+    map(~ calculate_effect_size(.x)) 
+```

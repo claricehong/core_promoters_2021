@@ -1,0 +1,680 @@
+---
+title: "expression and mapping"
+output: html_document
+---
+
+```{r message=F}
+library(ggstatsplot)
+library(colorspace)
+library(ggrepel)
+library(GenomicRanges)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts('Helvetica' = 'TT Helvetica')
+
+pretty_theme <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') +
+        theme(panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank(), 
+              plot.title = element_text(hjust = 0.5), 
+              text = element_text(size=24, colour = 'black'),
+              panel.border = element_blank(), 
+              axis.line = element_line(colour = "black"),
+              axis.ticks.x = element_line(colour = 'black'),
+              axis.ticks.y = element_line(colour = 'black'),
+              axis.text.x = element_text(colour = 'black'),
+              axis.text.y = element_text(colour = 'black'))
+}
+
+pretty_theme_facet <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') + 
+        theme(panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank(), 
+              plot.title = element_text(hjust = 0.5),
+              text = element_text(size = 24, colour = 'black'),
+              strip.background = element_blank(),
+              panel.border = element_rect(colour="black"), 
+              axis.ticks.x = element_line(colour = 'black'),
+              axis.ticks.y = element_line(colour = 'black'),
+              axis.text.x = element_text(colour = 'black'),
+              axis.text.y = element_text(colour = 'black'))
+}
+```
+
+```{r}
+common <- c("tBC", "iBC")
+```
+
+Read files
+
+```{r}
+files = fs::dir_ls(path = '.', glob = '*_counts') %>%
+    as.character() %>%
+    purrr::set_names(function(x) {
+        str_sub(fs::path_file(x), end = - str_length('_5_threshold_counts') - 1)
+    })
+```
+
+```{r message=F}
+dfs = files %>% map(~ read_tsv(.x))
+```
+
+```{r}
+seq_depths = read.csv("seq_depths.Csv", 
+                      header = F) %>%
+    deframe() %>%
+    as.list()
+```
+
+```{r}
+filter_df <- function(counts_df, seq_depth, min_count){
+    
+    counts_df %>%
+        filter(count > min_count) %>%
+        mutate(norm_count = count/seq_depth*1000000) %>%
+        select(-count) %>%
+        filter(tBC != 'CGGAAGAGCACACGTC')
+    
+}
+```
+
+```{r}
+filtered_dfs = names(dfs) %>%
+    set_names() %>%
+    map(function(name){
+        filter_df(dfs[[name]], seq_depths[[name]], min_count = 10)
+    })
+```
+
+```{r}
+ggplot(filtered_dfs$DNA_P4, aes(log2(norm_count))) + 
+    geom_histogram(colour = 'black', fill = 'pink') + 
+    pretty_theme() #+ 
+    # scale_y_continuous(expand = c(0,0), limits = c(0, 000))
+```
+
+Check reproducibility
+
+```{r}
+plot_reproducibility_bc <- function(df1, df2, log = FALSE){
+    
+    df1_names <- paste(colnames(df1)[3], '.x', sep = '')
+    df2_names <- paste(colnames(df2)[3], '.y', sep = '')
+    
+    new <- inner_join(df1, df2, by = common)
+    
+    if (log == FALSE) {
+        plot <- new %>%
+            ggscatterstats(!!ensym(df1_names), 
+                           !!ensym(df2_names), 
+                           marginal = FALSE, 
+                           line.color = 'gray', 
+                           line.size = 0.5, 
+                           point.size = 1.5, 
+                           point.alpha = 1) 
+        # ggplot(aes(!!ensym(df1_names), !!ensym(df2_names))) + geom_jitter() + theme_bw() + xlab('Replicate 1') + ylab('Replicate 2')
+    } else {
+        plot <- new %>%
+            transmute(x_log = log2(!!ensym(df1_names)), 
+                      y_log = log2(!!ensym(df2_names))) %>%
+            ggscatterstats(x_log, 
+                           y_log, 
+                           marginal = FALSE, 
+                           line.color = 'gray', 
+                           line.size = 0.5, 
+                           point.size = 1.5, 
+                           point.alpha = 1, 
+                           ggtheme = ggplot2::theme_bw) 
+    }
+    
+    print('Percentage of matched barcodes in first table')
+    print(nrow(new)/nrow(df1))
+    print('Percentage of matched barcodes in second table')
+    print(nrow(new)/nrow(df2))
+    
+    plot
+}
+```
+
+```{r}
+plot_reproducibility_bc(filtered_dfs$DNA_P3_1, filtered_dfs$DNA_P3_2, log = TRUE) 
+```
+
+Calculate expression by tech rep
+
+```{r}
+calculate_techrep_expression <- function(DNA, RNA){
+  
+    left_join(filtered_dfs[[DNA]], 
+            filtered_dfs[[RNA]], 
+            by = common) %>%
+    mutate('exp' = log2(norm_count.y/norm_count.x)) %>%
+    select(-contains('count'))
+}
+```
+
+```{r}
+exp_by_techrep_names = tribble(
+    ~DNA, ~RNA,
+    "DNA_P3_1", "RNA_P3_1",
+    "DNA_P3_2", "RNA_P3_2"
+    
+)
+```
+
+```{r}
+exp_by_techrep = exp_by_techrep_names %>%
+    pmap(calculate_techrep_expression) %>%
+    set_names(c('P3_1', 'P3_2'))
+```
+
+```{r}
+inner_join(exp_by_techrep$P3_1, exp_by_techrep$P3_2, by = common) %>%
+    ggplot(aes(exp.x, exp.y)) +
+    geom_point() +
+    pretty_theme() +
+    ylab('R2') +
+    xlab('R1') 
+
+# ggsave('figures/TRIP technical rep.pdf', height = 4, width = 4)
+```
+
+Combine DNA and RNA to calculate expression
+
+```{r}
+sum_replicate_counts <- function(df1, df2){
+    full_join(filtered_dfs[[df1]], filtered_dfs[[df2]], by = common) %>%
+        mutate(norm_count = rowSums(select(., starts_with("norm")), na.rm = TRUE)) %>%
+        select(-contains('.'))
+}
+```
+
+```{r}
+replicate_names = tribble(
+    ~df1, ~df2,
+    "DNA_P3_1", "DNA_P3_2",
+    "RNA_P3_1", "RNA_P3_2",
+)
+```
+
+```{r}
+combined_techrep_counts = replicate_names %>% 
+    pmap(sum_replicate_counts) %>%
+    set_names(c('DNA_P3', 'RNA_P3'))
+```
+
+```{r}
+all_counts = combined_techrep_counts %>%
+    append(filtered_dfs[c('DNA_P1', 'DNA_P2', 'DNA_P4', 'RNA_P1', 'RNA_P2', 'RNA_P4')])
+```
+
+Calculate expression
+
+```{r}
+calculate_expression <- function(DNA, RNA){
+    
+    left_join(all_counts[[DNA]], 
+              all_counts[[RNA]], 
+              by = common) %>%
+        mutate(repressed = case_when(
+            is.na(norm_count.y) & norm_count.x > 5  ~ 'repressed',
+            TRUE ~ 'expressed'
+        )) %>%
+        mutate(norm_count.y = replace_na(norm_count.y, 0)) %>%
+        mutate(norm_count.y = norm_count.y + 0.4) %>%
+        mutate(exp = log2(norm_count.y/norm_count.x)) %>%
+        dplyr::select(-contains('count'))
+}
+```
+
+```{r}
+exp_names = tribble(
+    ~DNA, ~RNA,
+    "DNA_P1", "RNA_P1",
+    "DNA_P2", "RNA_P2",
+    "DNA_P3", "RNA_P3",
+    "DNA_P4", "RNA_P4"
+)
+```
+
+```{r}
+exp = exp_names %>%
+    pmap(calculate_expression) %>%
+    set_names(c('exp_P1', 'exp_P2', 'exp_P3', 'exp_P4'))
+```
+
+```{r}
+all = exp %>%
+    purrr::reduce(bind_rows)
+```
+
+Read mapping file
+
+```{r message=F}
+mapping_files = fs::dir_ls(path = '../mapping nextseq 072720/', glob = '*.bed') %>%
+    as.character() %>%
+    purrr::set_names(c('map_P1_1', 'map_P2_1', 'map_P3_1', 'map_P4_1', 'map_P1_2', 'map_P2_2', 'map_P3_2', 'map_P4_2'))
+```
+
+```{r message=F}
+mapping_dfs = mapping_files %>% 
+    map(~ read_tsv(.x, col_names = c('chr', 'location', 'crap', 'iBC', 'tBC', 'count', 'strand'))) %>%
+    map(~ select(.x, -contains('crap')))
+```
+
+Combine mapping 'replicates'
+
+```{r}
+combine_mapping_files = function(df1, df2){
+    
+    df1 = mapping_dfs[[df1]]
+    df2 = mapping_dfs[[df2]]
+    
+    common_colnames = c('tBC', 'iBC', 'chr', 'location', 'strand')
+    
+    both = inner_join(df1, df2, by = common_colnames) %>%
+        mutate(count = count.x + count.y) %>%
+        select(-contains('.'))
+    
+    # print('proportion in both:')
+    # print(nrow(both)/nrow(df1))
+    # print(nrow(both)/nrow(df2))
+    
+    disagree_df1 = inner_join(df1, df2, by = c('tBC', 'iBC')) %>%
+        filter(location.x != location.y) %>%
+        filter(count.x/2 > count.y) %>%
+        select(contains('.x'), 'tBC', 'iBC') %>%
+        rename_at(.vars = vars(ends_with(".x")),
+                  .funs = ~ str_sub(., end = - str_length('.x') - 1))
+    
+    disagree_df2 = inner_join(df1, df2, by = c('tBC', 'iBC')) %>%
+        filter(location.x != location.y) %>%
+        filter(count.y/2 > count.x) %>%
+        select(contains('.y'), 'tBC', 'iBC') %>%
+        rename_at(.vars = vars(ends_with(".y")),
+                  .funs = ~ str_sub(., end = - str_length('.y') - 1))
+    
+    df1_only = anti_join(df1, df2, by = c('tBC', 'iBC'))
+    
+    # print('proportion in df1 only:')
+    # print(nrow(df1_only)/nrow(df1))
+    
+    df2_only = anti_join(df2, df1, by = c('tBC', 'iBC'))
+    
+    # print('proportion in df2 only:')
+    # print(nrow(df2_only)/nrow(df2))
+    
+    bind_rows(both, df1_only, df2_only, disagree_df1, disagree_df2)
+}
+```
+
+```{r}
+combine_mapping_names = tribble(
+    ~df1, ~df2,
+    'map_P1_1', 'map_P1_2',
+    'map_P2_1', 'map_P2_2',
+    'map_P3_1', 'map_P3_2',
+    'map_P4_1', 'map_P4_2',
+)
+``` 
+
+```{r}
+combined_mapping_dfs = combine_mapping_names %>%
+    pmap(combine_mapping_files) %>%
+    set_names(c('map_P1', 'map_P2', 'map_P3', 'map_P4'))
+```
+
+```{r}
+combine_mapping_w_exp = function(exp_df, map_df, pool_num){
+
+    inner_join(exp[[exp_df]], combined_mapping_dfs[[map_df]], by = common) %>%
+    mutate(pool = pool_num)
+}   
+```
+
+```{r}
+combine_mapping_w_exp_names = tribble(
+    ~exp_df, ~map_df, ~pool_num,
+    'exp_P1', 'map_P1', 'P1',
+    'exp_P2', 'map_P2', 'P2',
+    'exp_P3', 'map_P3', 'P3',
+    'exp_P4', 'map_P4', 'P4'
+    
+)
+```
+
+```{r}
+exp_mapped_files = combine_mapping_w_exp_names %>%
+    pmap(combine_mapping_w_exp) %>%
+    set_names(c('P1', 'P2', 'P3', 'P4'))
+```
+
+```{r}
+all_mapped = exp_mapped_files %>%
+    purrr::reduce(bind_rows) %>%
+    filter(iBC != 'CRE-hk1' & iBC != 'basal') %>%
+    select(-count)
+```
+
+```{r}
+all_mapped %>%
+    count(iBC)
+```
+
+```{r}
+prom_colours = c('#eeb1c0', '#acdcd2', '#e5839b', '#76c5b2', '#c85a75', '#528a7c')
+```
+
+```{r}
+all_mapped %>%
+    mutate(iBC = factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    # ggplot(aes(iBC, exp, fill = iBC)) + 
+    geom_violin() + 
+    geom_boxplot(fill = 'white', width = 0.1) + 
+    # geom_jitter() +
+    pretty_theme() + 
+    scale_fill_manual(values = prom_colours) +
+    theme(text = element_text(size = 24), legend.position = 'None') + 
+    xlab('') +
+    ylab('log2(exp)')
+
+# ggsave('figures/mapped exp by iBC.pdf', dpi = 600, height = 4, width = 6.5)
+```
+
+```{r}
+exp_mapped_files %>%
+    purrr::reduce(bind_rows) %>%
+    filter(grepl('hk1', iBC)) %>%
+    mutate(iBC = factor(iBC, levels = c('hk1', 'CRE-hk1'))) %>%
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    geom_violin() + 
+    geom_boxplot(fill = 'white', width = 0.1) + 
+    # geom_jitter() +
+    pretty_theme() + 
+    ylab('log2(exp)') +
+    theme(legend.position = 'None') +
+    scale_fill_manual(values = c('lightgray', 'darkgray')) +
+    xlab('')
+
+# ggsave('figures/CRE-hk1.png', dpi = 600, height = 4, width = 4.5)
+```
+
+Get correlations with LP values
+
+```{r}
+get_correlation = function(one, two, squared = FALSE){
+  
+  if (squared == TRUE){
+    correlation = signif((cor.test(one, two)$estimate)**2, 2)
+  } else {
+    correlation = signif(cor.test(one, two)$estimate, 2)
+  }
+  
+  return (correlation)
+}
+```
+
+```{r message=F}
+plasmid_exp = read_tsv("../../Cloning/core promoter TRIP sequences.txt")
+```
+
+```{r}
+TRIP_LP_combined = all_mapped %>%
+    group_by(iBC) %>%
+    summarise(TRIP_mean = mean(exp)) %>%
+    inner_join(plasmid_exp, by = c('iBC' = 'construct')) %>%
+    pivot_longer(cols = contains('LP'), names_to = 'LP', values_to = 'mean_exp') %>%
+    mutate(LP = case_when(
+        LP == 'LP3' ~ 'loc1',
+        LP == 'LP4' ~ 'loc2',
+        LP == 'LP5' ~ 'loc3',
+        LP == 'LP6' ~ 'loc4',
+    ))
+
+correlation =
+    TRIP_LP_combined %>%
+    split(.$LP) %>%
+    map(~ get_correlation(.x$TRIP_mean, .x$mean_exp, squared = TRUE)) %>%
+    as_tibble() %>%
+    pivot_longer(cols = colnames(.), names_to = 'LP', values_to = 'correlation') %>%
+    filter(LP != 'loc1') %>%
+    mutate(correlation = paste('r^2 ==', correlation))
+
+# correlation = get_correlation(tmp$TRIP_mean, tmp$LP3, squared = TRUE)
+
+TRIP_LP_combined %>%
+    filter(LP != 'loc1') %>%
+    ggplot(aes(TRIP_mean, mean_exp)) +
+    geom_point() + 
+    pretty_theme_facet() +
+    # annotate('text', x = -3.1, y = 4.9, label = paste('R^2 ==', correlation), size = 8, parse = TRUE) +
+    geom_text(data = correlation, aes(x = -2.8, y = 5.1, label = correlation), size = 5, parse = TRUE) +
+    facet_wrap(~ LP, nrow = 1) +
+    xlab('log2(mean exp genome-wide)') + 
+    ylab('log2(genomic loc exp)') +
+    theme(text = element_text(size = 28)) +
+    # geom_text_repel(aes(label = iBC)) +
+    geom_smooth(method = 'lm', colour = 'darkgray')
+
+# ggsave('figures/LP3 TRIP correlation.pdf', dpi = 600, width = 6, height = 4)
+# ggsave('figures/other LPs TRIP correlation.pdf', dpi = 600, width = 9, height = 4)
+```
+
+```{r}
+library(wrMisc)
+```
+
+```{r}
+plasmid_exp %>%
+    filter(construct != 'CRE-hk1') %>%
+    mutate(construct = factor(construct, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    mutate(LP3 = 2**LP3, LP4 = 2**LP4, LP5 = 2**LP5, LP6 = 2**LP6) %>%
+    mutate(all_LP_mean = rowMeans(select(., starts_with('LP'))),
+           all_LP_sem = rowSEMs(select(., starts_with('LP')))) %>%
+    ggplot(aes(construct, all_LP_mean, fill = construct)) +
+    geom_col(colour = 'black') +
+    geom_errorbar(aes(ymin = all_LP_mean, ymax = all_LP_mean + all_LP_sem),
+                  width = 0.2) +
+    pretty_theme() + 
+    scale_y_continuous(expand = c(0,0), limits = c(0, 9)) +
+    scale_fill_manual(values = prom_colours) +
+    theme(legend.position = 'none') +
+    xlab('') +
+    ylab('LP expression')
+
+# ggsave('figures/mean LP expression barplot.png', dpi = 600)
+```
+```{r}
+# tmp = all_mapped %>%
+#     select(iBC, tBC, exp, chr, location, strand) %>%
+#     dplyr::rename('promoter' = 'iBC', 'TRIP_barcode' = 'tBC', 'log2(exp)' = 'exp') %>%
+#     filter(promoter != 'hsp68' & promoter != 'CRE-hk1') %>%
+#     mutate(promoter = 
+#                factor(promoter, levels = c('hk1', 'hk2', 'hk3', 'dev1', 'dev2', 'dev3'))) %>%
+#     arrange(promoter)
+# 
+# write_tsv(tmp, '../../../Promoter Screen/Draft/Supplemental Files/TRIP integrations and expression.tsv')
+```
+
+Find barcodes that map to same locations
+
+```{r}
+locations_with_multiple_bcs = all_mapped %>%
+    count(chr, location) %>%
+    mutate(barcodes = case_when(
+        n == 1 ~ 'single', 
+        n > 1 ~ 'multiple'
+    ))
+```
+
+```{r}
+locations_with_multiple_bcs %>%
+    filter(barcodes == 'multiple') %>%
+    arrange(desc(n))
+```
+
+```{r}
+combined_mapping_dfs %>%
+    reduce(bind_rows) %>%
+    inner_join(all_mapped %>% filter(location == 131274640)) %>%
+    filter(location == 131274640)
+```
+
+```{r}
+all_mapped %>%
+    count(iBC, tBC) %>%
+    filter(n > 1)
+```
+
+```{r}
+combined_mapping_dfs %>%
+    reduce(bind_rows) %>%
+    filter(tBC == 'GCCCATACCATTCCCA')
+```
+
+Find overlap with BRD4 peaks
+
+```{r message=F}
+brd4_peaks = read_tsv('../../Genome annotations/BRD4/GSM2635249_ChIP-seq_K562_DMSO_BRD4_peaks.bed.gz',
+                      col_names = c('chr', 'start', 'end', 'name', 'score')) %>%
+                      makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+locations_multiple_bcs_granges = locations_with_multiple_bcs %>%
+    mutate(start = location, end = location) %>%
+    select(-location) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+brd4_overlap = findOverlaps(locations_multiple_bcs_granges, brd4_peaks)
+```
+
+```{r}
+locations_multiple_bcs_granges[queryHits(brd4_overlap)] %>%
+    as.tibble() %>%
+    mutate(brd4 = '1') %>%
+    right_join(locations_with_multiple_bcs, by = c('seqnames' = 'chr', 'start' = 'location', 'n', 'barcodes')) %>%
+    mutate(brd4 = replace_na(brd4, 0)) %>%
+    ggplot(aes(barcodes, fill = brd4)) +
+    geom_bar() +
+    pretty_theme()
+```
+
+```{r}
+bind_cols(brd4_peaks[subjectHits(brd4_overlap)] %>% as_tibble(),
+          locations_multiple_bcs_granges[queryHits(brd4_overlap)] %>% as_tibble()) %>%
+          ggplot(aes(barcodes, score)) +
+          geom_boxplot() +
+          pretty_theme()
+```
+
+Find overlap with H3K27ac peaks
+
+```{r}
+H3K27ac_overlap = findOverlaps(locations_multiple_bcs_granges, H3K27ac)
+```
+
+```{r}
+locations_multiple_bcs_granges[queryHits(H3K27ac_overlap)] %>%
+    as.tibble() %>%
+    mutate(H3K27ac = '1') %>%
+    right_join(locations_with_multiple_bcs, by = c('seqnames' = 'chr', 'start' = 'location', 'n', 'barcodes')) %>%
+    mutate(H3K27ac = replace_na(H3K27ac, 0)) %>%
+    ggplot(aes(barcodes, fill = H3K27ac)) +
+    geom_bar() +
+    pretty_theme()
+```
+
+```{r}
+bind_cols(H3K27ac[subjectHits(H3K27ac_overlap)] %>% as_tibble(),
+          locations_multiple_bcs_granges[queryHits(H3K27ac_overlap)] %>% as_tibble()) %>%
+          ggplot(aes(barcodes, log2(score))) +
+          # geom_boxplot() +
+          pretty_theme()
+```
+
+Find integrations that are far from H3K27ac sites
+
+```{r message=F}
+H3K27ac_extended = read_tsv('../../Genome annotations/Histone modifications/H3K27ac_hg38_narrowPeaks.bed.gz', 
+                   col_names = c('chrom', 'start', 'stop', 'crap1', 'score', 'crap2', 'crap3', 'crap4', 'crap5', 'crap6')) %>%
+  select(-contains('crap')) %>%
+            mutate(start = start - 50000, stop = stop + 50000) %>%
+            makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+all_mapped_granges = all_mapped %>%
+    mutate(start = location, stop = location) %>%
+    select(-location) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+H3K27ac_non_overlaps = subsetByOverlaps(all_mapped_granges, H3K27ac_extended, invert = TRUE)
+H3K27ac_all_overlaps = subsetByOverlaps(all_mapped_granges, H3K27ac)
+```
+
+```{r}
+H3K27ac_non_overlap_bcs = H3K27ac_non_overlaps %>%
+    as_tibble() %>%
+    mutate(H3K27ac = 'outside 50kb of H3K27ac')
+
+H3K27ac_overlap_bcs = H3K27ac_all_overlaps %>%
+    as_tibble() %>%
+    mutate(H3K27ac = 'H3K27ac')
+
+bind_rows(H3K27ac_non_overlap_bcs, H3K27ac_overlap_bcs) %>%
+    right_join(all_mapped, by = c(common, 'strand', 'repressed', 'exp', 'pool')) %>%
+    mutate(H3K27ac = replace_na(H3K27ac, 'within 50kb of H3K27ac')) %>%
+    mutate(iBC = factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    mutate(H3K27ac = factor(H3K27ac, levels = c('H3K27ac', 'within 50kb of H3K27ac', 'outside 50kb of H3K27ac'))) %>%
+    # count(H3K27ac)
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    geom_violin() +
+    geom_boxplot(fill = 'white', width= 0.1) +
+    scale_fill_manual(values = prom_colours) +
+    pretty_theme_facet() +
+    theme(legend.position = 'none') +
+    facet_wrap(~ H3K27ac) +
+    xlab('') +
+    ylab('log2(exp)') +
+    ylim(-8, 8)
+
+ggsave('figures/mapped exp by iBC 50kb H3K27ac split.pdf', height = 5.5, width = 13)
+```
+
+```{r}
+bind_rows(H3K27ac_non_overlap_bcs, H3K27ac_overlap_bcs) %>%
+    right_join(all_mapped, by = c(common, 'strand', 'repressed', 'exp', 'pool')) %>%
+    mutate(H3K27ac = replace_na(H3K27ac, 'within 50kb of H3K27ac')) %>%
+    # mutate(iBC = factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    select(-start, -end, -chr, -width) %>%
+    filter(iBC == 'dev3' | iBC == 'hk3') %>%
+    # filter(H3K27ac == 'outside 50kb of H3K27ac') %>%
+    ggstatsplot::grouped_ggbetweenstats(iBC, exp, grouping.var = H3K27ac)
+```
+
+```{r}
+find_chromHMM_annotation = findOverlaps(all_mapped_granges, chromHMM_granges)
+```
+
+```{r}
+bind_cols(all_mapped_granges[queryHits(find_chromHMM_annotation)] %>% as_tibble(),
+          chromHMM_granges[subjectHits(find_chromHMM_annotation)] %>% as_tibble()) %>%
+    ggplot(aes(y = name)) +
+    geom_bar(colour = 'black', fill = 'darkgray') +
+    pretty_theme() +
+    scale_x_continuous(expand = c(0,0), limits = c(-100, 10000)) +
+    ylab('') +
+    theme(text = element_text(size = 16))
+
+ggsave('figures/all integrations chromHMM.pdf', width = 6, height = 8)
+```
+
+

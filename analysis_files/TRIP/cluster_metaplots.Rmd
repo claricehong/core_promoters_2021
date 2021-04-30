@@ -1,0 +1,213 @@
+---
+title: "cluster metaplots"
+output: html_document
+---
+
+```{r message=F}
+library(EnrichedHeatmap)
+library(circlize)
+library(tidyverse)
+```
+
+```{r message = F}
+methyl =
+    data.table::fread('../../Genome annotations/DNA methylation/WGBS_hg38_merged_average.bed.gz', 
+                     skip = 1L) %>%
+    dplyr::rename('chrom' = 'V1', 'start' = 'V2', 'stop'= 'V3', 'score' = 'V5') %>%
+    select(-contains('V')) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+methyl_mat = normalizeToMatrix(methyl, 
+                             all_clusters_granges,
+                             value_column = 'score',
+                             extend = 5000,
+                             mean_mode = 'absolute',
+                             background = NA,
+                             w = 50,
+                             target_ratio = 0.33)
+```
+
+```{r}
+pdf('cluster_annotations/methyl heatmap.pdf', width = 3.5, height = 8)
+# col_fun = colorRamp2(, c("white", "red"))
+
+ht_list = 
+    EnrichedHeatmap(methyl_mat, 
+                    column_title = "methylation", 
+                    # col = col_fun, 
+                    top_annotation = HeatmapAnnotation(
+                        lines = anno_enriched(gp = gpar(
+                            col = c('#5a2378', '#d35658', '#f4e76c')),
+                            height = unit(2, 'in'),
+                            show_heatmap_legend = 'True',
+                            axis_param = list(
+                                side = 'left'
+                            )))) #
+ 
+    
+
+
+draw(ht_list, split = all_clusters_granges$cluster)
+dev.off
+```
+
+```{r}
+atac <- read.table("../../Genome annotations/ATAC/hg38_stablepeaks.bed") %>%
+  dplyr::rename(chr = 'V1', start = 'V2', end = 'V3', score = 'V5') %>%
+  select(-matches('V[0-9]')) %>%
+  distinct(chr, start, end)
+
+atac_granges <- makeGRangesFromDataFrame(atac, keep.extra.columns = TRUE)
+```
+
+```{r}
+ATAC_mat = normalizeToMatrix(atac_granges, 
+                             all_clusters_granges,
+                             # value_column = 'score',
+                             extend = 5000,
+                             mean_mode = 'w0',
+                             # background = NA,
+                             w = 50,
+                             target_ratio = 0.33
+                             )
+```
+
+```{r}
+pdf('cluster_annotations/atac heatmap.pdf', width = 3.5, height = 8)
+col_fun = colorRamp2(quantile(ATAC_mat, c(0, 0.99)), c("white", "red"))
+
+ht_list = 
+    
+    EnrichedHeatmap(ATAC_mat, 
+                    column_title = "ATAC", 
+                    col = col_fun,
+                    top_annotation = HeatmapAnnotation(
+                        lines = anno_enriched(gp = gpar(
+                            col = c('#5a2378', '#d35658', '#f4e76c')),
+                            height = unit(2, 'in'),
+                            axis_param = list(
+                                side = 'left'
+                            )))) 
+
+draw(ht_list, split = all_clusters_granges$cluster)
+dev.off
+```
+
+```{r message=F}
+H3K27ac = read_tsv('../../Genome annotations/Histone modifications/H3K27ac_hg38_narrowPeaks.bed.gz', 
+                   col_names = c('chrom', 'start', 'stop', 'crap1', 'score', 'crap2', 'crap3', 'crap4', 'crap5', 'crap6')) %>%
+  select(-contains('crap')) %>%
+            makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+H3K27ac_mat = normalizeToMatrix(H3K27ac, 
+                                all_clusters_granges, 
+                                value_column = "score", 
+                                extend = 5000, 
+                                mean_mode = "w0", 
+                                w = 50,
+                                target_ratio = 0.33
+                                )
+```
+
+```{r}
+pdf('cluster_annotations/H3K27ac heatmap.pdf', width = 3.5, height = 8)
+col_fun = colorRamp2(quantile(H3K27ac_mat, c(0, 0.99)), c("white", "red"))
+
+ht_list = 
+    
+    EnrichedHeatmap(H3K27ac_mat, 
+                    column_title = 'H3K27ac', 
+                    col = col_fun, 
+                    top_annotation = HeatmapAnnotation(
+                        lines = anno_enriched(gp = gpar(
+                            col = c('#5a2378', '#d35658', '#f4e76c')),
+                            height = unit(2, 'in'),
+                            axis_param = list(
+                                side = 'left'
+                            ))))  
+
+draw(ht_list, split = all_clusters_granges$cluster)
+dev.off
+```
+
+```{r message=F}
+H3K4me3 = read_tsv('../../Genome annotations/Histone modifications/H3K4me3_hg38_narrowPeaks.bed.gz', 
+                   col_names = c('chrom', 'start', 'stop', 'crap1', 'score', 'crap2', 'crap3', 'crap4', 'crap5', 'crap6')) %>%
+  select(-contains('crap')) %>%
+            makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+H3K4me3_mat = normalizeToMatrix(H3K4me3, 
+                                all_clusters_granges, 
+                                value_column = "score", 
+                                extend = 5000, 
+                                mean_mode = "weighted", 
+                                w = 50, 
+                                target_ratio = 0.33
+                                )
+```
+
+```{r}
+pdf('cluster_annotations/H3K4me3 heatmap.pdf', width = 3.5, height = 8)
+col_fun = colorRamp2(quantile(H3K4me3_mat, c(0, 0.99)), c("white", "red"))
+
+ht_list =  
+    EnrichedHeatmap(H3K4me3_mat, 
+                    column_title = "H3K4me3", 
+                    col = col_fun, 
+                    top_annotation = HeatmapAnnotation(
+                        lines = anno_enriched(gp = gpar(
+                            col = c('#5a2378', '#d35658', '#f4e76c')),
+                            height = unit(2, 'in'),
+                            axis_param = list(
+                                side = 'left'
+                            )))) 
+
+draw(ht_list, split = all_clusters_granges$cluster)
+dev.off
+```
+
+```{r message = F}
+PolII = read_tsv('../../Genome annotations/PolII/ENCFF285MBX.bed.gz',
+                 col_names = FALSE) %>%
+    dplyr::rename('chrom' = 'X1', 'start' = 'X2', 'stop'= 'X3', 'score' = 'X5') %>%
+    select(-contains('X')) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+PolII_mat = normalizeToMatrix(PolII, 
+                             all_clusters_granges,
+                             value_column = 'score',
+                             extend = 5000,
+                             mean_mode = 'w0',
+                             # background = NA,
+                             w = 50,
+                             target_ratio = 0.33)
+```
+
+```{r}
+pdf('cluster_annotations/PolII heatmap.pdf', width = 3.5, height = 8)
+# col_fun = colorRamp2(, c("white", "red"))
+
+ht_list = 
+    
+    EnrichedHeatmap(PolII_mat, 
+                    column_title = "PolII", 
+                    # col = col_fun, 
+                    top_annotation = HeatmapAnnotation(
+                        lines = anno_enriched(gp = gpar(
+                            col = c('#5a2378', '#d35658', '#f4e76c')),
+                            height = unit(2, 'in'),
+                            axis_param = list(
+                                side = 'left'
+                            ))))  
+
+draw(ht_list, split = all_clusters_granges$cluster)
+dev.off
+```

@@ -1,0 +1,929 @@
+---
+title: "cluster_analysis"
+output: html_document
+---
+
+```{r message=F}
+library(reticulate)
+library(circlize)
+library(viridis)
+library(ggrepel)
+library(colorspace)
+library(ggstatsplot)
+library(GGally)
+# library(BSgenome.Hsapiens.NCBI.GRCh38)
+library(gkmSVM)
+library(miscTools)
+library(ComplexHeatmap)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+```
+
+```{python}
+from collections import defaultdict
+import pandas as pd
+import itertools
+import numpy as np
+```
+
+Functions for clustering
+
+```{python}
+def find_furthest(loc_set):
+    
+    n = 100
+    
+    for idx, i in enumerate(reversed(loc_set[4:])):
+        if i[2] - loc_set[0][2] < 5000:
+            n = 10 - idx
+            break
+            
+    if n == 100:
+        return 'far'
+    else:
+        return n
+```
+
+```{python}
+def process_mapped(prom_locs):
+    
+    current_set = []
+    
+    prom_locs.sort(key = lambda x:x[2])
+    split_locs = [prom_locs[i:i+10] for i in range(0, len(prom_locs) - 10, 1)]
+    for loc_set in split_locs:
+        idx = find_furthest(loc_set)
+        if idx != 'far':
+            current_set = loc_set[:idx]
+    
+        yield current_set
+    
+```
+
+```{python}
+def assign_exp(bc, exp):
+
+    if bc[1] == 'hk1':
+        exp[0] = bc[3]
+    elif bc[1] == 'hk2':
+        exp[1] = bc[3]
+    elif bc[1] == 'hk3':
+        exp[2] = bc[3]
+    elif bc[1] == 'dev1':
+        exp[3] = bc[3]
+    elif bc[1] == 'dev2':
+        exp[4] = bc[3]
+    elif bc[1] == 'dev3':
+        exp[5] = bc[3]
+        
+    return exp
+```
+
+```{python}
+def average_repeat_measurements(current_set, repeat_iBCs):
+    
+    unique_entries = []
+    d_repeat_entries = {}
+    
+    for repeat_iBC in list(set(repeat_iBCs)):
+        d_repeat_entries[repeat_iBC] = []
+    
+    for entry in current_set:
+        if entry[1] not in repeat_iBCs:
+            unique_entries.append(entry)
+        else:
+            d_repeat_entries[entry[1]].append(entry[3])
+            
+    for iBC, exp in d_repeat_entries.items():
+        unique_entries.append(('NA', iBC, 'NA', np.median(exp)))
+    return unique_entries
+```
+
+```{python}
+def find_extra_iBCs(current_set_iBCs):
+    
+    unique_iBCs = []
+    repeat_iBCs = []
+    
+    for iBC in current_set_iBCs:
+        if iBC not in unique_iBCs:
+            unique_iBCs.append(iBC)
+        else:
+            repeat_iBCs.append(iBC)
+            
+    return repeat_iBCs
+```
+
+```{python}
+d_all_mapped = defaultdict(list)
+
+for idx, row in r.all_mapped.iterrows():
+    if row['iBC'] != 'CRE-hk1' and row['iBC'] != 'hsp68':
+        d_all_mapped[row['chr']].append((row['tBC'], row['iBC'], row['location'], \
+            row['exp'], row['strand']))
+
+```
+
+Use the median of repeat measured iBCs in the 5kb bin
+
+```{python}
+all_exp = []
+all_tBCs = []
+used_locs = defaultdict(list)
+
+for chrom, prom_locs in d_all_mapped.items():
+    all_sets = process_mapped(prom_locs)
+    for current_set in all_sets:
+        if len(current_set) != 0:
+            current_set_iBCs = [i[1] for i in current_set]
+            unique_iBC_count = len(set(current_set_iBCs))
+            if unique_iBC_count >= 4:
+                used_locs[chrom].extend(current_set)
+                last_BC_location = chrom + ':' + str(current_set[-1][2])
+                location_range = \
+                    chrom + ':' + str(current_set[0][2]) + ':' + str(current_set[-1][2])
+                current_exp = [int('1000')] * 6 + [location_range, last_BC_location]
+                if unique_iBC_count == len(current_set_iBCs):
+                    for bc in current_set:
+                        current_exp = assign_exp(bc, current_exp)
+                    all_exp.append(current_exp)
+                else:
+                    repeat_iBCs = find_extra_iBCs(current_set_iBCs)
+                    updated_set = average_repeat_measurements(current_set, repeat_iBCs)
+                    for bc in updated_set:
+                        current_exp = assign_exp(bc, current_exp)
+                    all_exp.append(current_exp)
+        
+all_exp_df = pd.DataFrame(all_exp, columns = ['hk1', 'hk2', 'hk3', 'dev1', 'dev2', 'dev3', 'location_range', 'last_BC_location'])
+```
+
+Find the locations that were not used in this clustering
+
+```{python}
+unused_locs = []
+
+for chrom, prom_locs in d_all_mapped.items():
+    for loc in prom_locs:
+        if loc not in used_locs[chrom]:
+            unused_locs.append([chrom, loc[0], loc[1], loc[2]])
+
+unused_locs_df = pd.DataFrame(unused_locs, columns = ['chr', 'tBC', 'iBC', 'location'])
+```
+
+```{r message=F}
+all_unused_locs = 
+    inner_join(all_mapped, py$unused_locs_df)
+```
+
+Plot heatmap
+
+```{r}
+close_mat = py$all_exp_df %>%
+    distinct() %>%
+    distinct(last_BC_location, .keep_all = TRUE) %>%
+    na_if(., 1000) %>%
+    select(-last_BC_location) %>%
+    # arrange(dev2) %>%
+    column_to_rownames('location_range') %>%
+    as.matrix()
+```
+
+```{r}
+col_fun = colorRamp2(seq(-6, 5, length = 21), viridis(option = 'inferno', 21))
+# png('figures/close locations heatmap core only.png', units = 'in', res = 300, width = 4.5, height = 6)
+pdf('figures/close locations heatmap core only.pdf', width = 4.5, height = 6)
+# ha = HeatmapAnnotation(plasmid = plasmid_exp_lst)
+hm_unclustered =
+    Heatmap(close_mat, 
+            show_row_names = FALSE, 
+            col = col_fun, 
+            name = 'log2(exp)',
+            show_row_dend = FALSE, 
+            # row_order = order(close_mat[,5]),
+            row_dend_reorder = TRUE,
+            cluster_rows = FALSE,
+            na_col = 'transparent',
+            column_order = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'), 
+            column_names_side = 'top',
+            column_names_rot = 0, 
+            column_names_centered = TRUE)
+hm = draw(hm_unclustered)
+dev.off()
+```
+
+Random sample
+
+```{r}
+sample_promoters = function(df){
+    df %>%
+        sample_n(size = 1200) %>%
+        pivot_wider(names_from = iBC, values_from = exp) %>%
+        select(matches('hk|dev'))
+    
+    promoter = df$iBC[[1]]
+    df %>%
+        sample_n(nrow(df)) %>%
+        select(-iBC) %>%
+        dplyr::rename(!!promoter := 'exp')
+}
+```
+
+```{r}
+set.seed(3020)
+
+random_mat =
+    as_tibble(close_mat) %>%
+    pivot_longer(cols = colnames(.), names_to = 'iBC', values_to = 'exp') %>% 
+    split(.$iBC) %>%
+    map(~ sample_promoters(.x)) %>%
+    reduce(bind_cols) %>%
+    mutate(count = rowSums(is.na(.))) %>%
+    filter(count < 3) %>%
+    select(-count) %>%
+    as.matrix()
+```
+
+```{r}
+set.seed(3020)
+
+random_mat = all_mapped %>%
+    split(.$iBC) %>%
+    map(~ sample_promoters(.x)) %>%
+    reduce(bind_cols) %>%
+    as.matrix()
+```
+
+```{r}
+col_fun = colorRamp2(seq(-6, 5, length = 21), viridis(option = 'inferno', 21))
+# png('figures/close locations heatmap core only.png', units = 'in', res = 300, width = 4.5, height = 6)
+# pdf('figures/random locations heatmap core only.pdf', width = 4.5, height = 6)
+hm_unclustered =
+    Heatmap(random_mat, 
+            show_row_names = FALSE, 
+            col = col_fun, 
+            name = 'log2(exp)',
+            show_row_dend = FALSE, 
+            # row_order = order(close_mat[,5]),
+            row_dend_reorder = TRUE,
+            cluster_rows = FALSE,
+            na_col = 'transparent',
+            column_order = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'), 
+            column_names_side = 'top',
+            column_names_rot = 0, 
+            column_names_centered = TRUE)
+hm = draw(hm_unclustered)
+# dev.off()
+```
+
+Cluster heatmap
+
+```{r}
+library(ConsensusClusterPlus)
+```
+
+```{r}
+# results = ConsensusClusterPlus(t(imputed_close_mat),
+#                                maxK = 10,
+#                                reps = 1000,
+#                                pItem = 0.8,
+#                                pFeature = 1,
+#                                title = 'coreonly_km_10k',
+#                                clusterAlg = "km",
+#                                distance = "euclidean",
+#                                seed = 9508,
+#                                plot = "pdf")
+```
+
+```{r}
+consensus_imputed_split =
+  as_tibble(results[[7]][['consensusClass']], rownames = 'location') %>%
+  right_join(as_tibble(close_mat, rownames = 'location'), by = 'location') %>%
+    mutate(cluster = case_when(
+        value == 1 ~ 'low',
+        value == 2 ~ 'medium',
+        value == 3 ~ 'high',
+        value == 4 ~ 'medium',
+        value == 5 ~ 'medium',
+        value == 6 ~ 'high',
+        value == 7 ~ 'low'
+    )) %>%
+  select(cluster)
+```
+
+```{r}
+col_fun = colorRamp2(seq(-6, 5, length = 21), viridis(option = 'inferno', 21))
+# png('coreonly_figures/close locations heatmap core imputed clusters.png', width = 5, height = 6, units = 'in', res = 300)
+pdf('coreonly_figures/close locations heatmap core imputed clusters.pdf', width = 5, height = 6)
+hm_impute_original_data = Heatmap(close_mat, 
+                                  show_row_names = FALSE, 
+                                  col = col_fun,
+                                  row_gap = unit(3, "mm"), 
+                                  name = 'log2(exp)',
+                                  row_dend_reorder = TRUE,
+                                  show_row_dend = FALSE,
+                                  na_col = 'white',
+                                  cluster_rows = FALSE,
+                                  # cluster_rows = results[[7]][["consensusTree"]],
+                                  column_order = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'),
+                                  row_split = consensus_imputed_split,
+                                  column_names_side = 'top',
+                                  column_names_rot = 0, 
+                                  column_names_centered = TRUE
+)
+hm_impute_original_data = draw(hm_impute_original_data)
+dev.off()
+```
+
+```{r}
+all_clusters = 
+    bind_cols(as_tibble(close_mat,
+                        rownames = 'location'), 
+              as_tibble(results[[7]][['consensusClass']])) %>%
+    mutate(cluster = case_when(
+        value == 1 ~ 'low',
+        value == 2 ~ 'medium',
+        value == 3 ~ 'high',
+        value == 4 ~ 'medium',
+        value == 5 ~ 'medium',
+        value == 6 ~ 'high',
+        value == 7 ~ 'low'
+    )) %>%
+    separate(location, into = c('chr', 'start', 'stop'), sep = ':') %>%
+    rownames_to_column('loc_id') %>%
+    mutate(cluster = factor(cluster, levels = c('low', 'medium', 'high')))
+```
+
+```{r}
+all_clusters_granges =
+    all_clusters %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+all_clusters_long =
+  all_clusters %>%
+    pivot_longer(cols = c(-chr, -start, -stop, -cluster, -loc_id, -value), names_to = 'iBC', values_to = 'exp') %>%
+    filter(!is.na(exp)) %>%
+    mutate(value = as.character(value))
+```
+
+```{r}
+all_clusters %>%
+    pivot_longer(cols = -c('cluster', 'chr', 'start', 'stop', 'loc_id', 'value'), 
+                 names_to = 'iBC', 
+                 values_to = 'exp') %>%
+    mutate(iBC = 
+        factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    distinct(loc_id, iBC, cluster, .keep_all = T) %>%
+    mutate(value = as.character(value)) %>%
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    geom_boxplot(fatten = 1) +
+    pretty_theme_facet() +
+    facet_wrap(~ cluster) +
+    scale_fill_manual(values = prom_colours) +
+    ylab('log2(exp)') +
+    # labs(fill = 'Promoter') +
+    xlab('') +
+    # theme(legend.position = 'None') 
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank()) +
+    ylim(-8, 5.8)
+
+ggsave('figures/core promoter expression by cluster.png', dpi = 600)
+```
+```{r}
+calculate_effect_size = function(df){
+   one = df %>%
+      filter(iBC == 'dev2') 
+   
+   two = df %>%
+      filter(iBC == 'hk1')
+   
+   # effectsize::cohens_d(one$exp, two$exp) %>%
+   #    as_tibble()
+   2**(median(two$exp) - median(one$exp))
+}
+```
+
+```{r}
+all_clusters_long %>%
+    split(.$cluster) %>%
+    map(~ calculate_effect_size(.x)) 
+```
+
+Find correlation per region
+
+```{r}
+LP_rank = plasmid_exp %>%
+    filter(construct != 'CRE-hk1') %>%
+    mutate(all_LP_mean = rowMeans(select(., starts_with('LP')))) %>% 
+    select(construct, all_LP_mean) %>%
+    arrange(all_LP_mean) %>%
+    rownames_to_column('LP_rank') %>%
+    mutate(LP_rank = as.numeric(LP_rank))
+```
+
+```{r}
+calculate_spearman_corr = function(df){
+    tmp = df %>%
+    inner_join(LP_rank, by = c('iBC' = 'construct')) 
+    
+    corr = cor.test(tmp$exp, tmp$all_LP_mean)
+  
+    tmp %>%
+        mutate(spear_corr = signif(corr$estimate, 2)) %>%
+        mutate(corr_pval = corr$p.value) %>%
+        distinct(loc_id, spear_corr, corr_pval)
+}
+```
+
+```{r}
+all_trip_spearman_corr = all_clusters_long %>%
+    split(.$loc_id) %>%
+    map(~ calculate_spearman_corr(.x)) %>%
+    reduce(bind_rows)
+```
+
+```{r}
+random_corr =
+    as_tibble(random_mat) %>%
+    rownames_to_column('loc_id') %>%
+    pivot_longer(cols = c(-loc_id), names_to = 'iBC', values_to = 'exp') %>%
+    split(.$loc_id) %>%
+    map(~ calculate_spearman_corr(.x)) %>%
+    reduce(bind_rows)
+```
+
+```{r}
+random_corr %>%
+    filter(spear_corr > 0.7) %>%
+    nrow()
+```
+
+```{r}
+all_trip_spearman_corr %>%
+    filter(spear_corr > 0.7) %>%
+    nrow()
+```
+
+```{r}
+792/nrow(all_clusters)
+```
+
+```{r}
+all_trip_spearman_corr %>%
+    mutate(random = '<5kb') %>%
+    bind_rows(random_corr %>% mutate(random = 'random')) %>%
+    mutate(random = factor(random, levels = c('random', '<5kb'))) %>%
+    mutate(spear_corr_sq = spear_corr**2) %>%
+    ggplot(aes(spear_corr, fill = random, alpha = 0.5)) +
+    geom_density() +
+    pretty_theme() +
+    scale_y_continuous(expand = c(0,0), limits = c(0, 2.55)) +
+    xlab('Correlation (r)') +
+    ylab('Density') +
+    scale_fill_manual(values = c('darkgray', 'yellow3'))
+
+ggsave('figures/all trip random rank correlations density.pdf', dpi = 600, height = 4, width = 6)
+```
+
+Are the regions diverse? 
+Overlap with chromHMM
+Clusters chromHMM
+
+```{r message=F}
+# high_annotations = c('Enh', 'EnhF', 'EnhWF', 'EnhW', 'DnaseU', 'DnaseD', 'FaireW')
+# transcribed = c('Tss', 'TssF', "Gen5'", 'Elon', 'ElonW', "Gen3'", 'Pol2', 'H4K20', 'PromF')
+# low_annotations = c('PromP', 'Low', 'ReprD', 'Repr', 'ReprW', 'Quies', 'Art')
+# repeats = c('CtcfO', 'Ctcf')
+
+# high_annotations = c('6_EnhG', '7_Enh', '8_ZNF/Rpts')
+# transcribed = c('1_TssA', '3_TxFlnk', '4_Tx', '2_TssAFlnk')
+# low_annotations = c('9_Het', '13_ReprPC', '14_ReprPCWk', '15_Quies', '5_TxWk')
+# bivalent = c('10_TssBiv', '11_BivFlnk', '12_EnhBiv')
+
+high_annotations = c('4_Strong_Enhancer', '6_Weak_Enhancer', '7_Weak_Enhancer', '5_Strong_Enhancer')
+transcribed = c('1_Active_Promoter', '11_Weak_Txn', '9_Txn_Transition', '10_Txn_Elongation', '2_Weak_Promoter', '3_Poised_Promoter')
+low_annotations = c('12_Repressed', '13_Heterochrom/lo')
+repeats = c('8_Insulator', '14_Repetitive/CNV', '15_Repetitive/CNV')
+
+chromHMM = read_tsv('../../Genome annotations/chromHMM/broad_hg38_relaxed_liftover_params.bed', 
+                    col_names = 
+                      c('chrom', 'start', 'stop', 'name', 'crap1', 'crap2', 'crap3', 'crap4', 'crap5'),
+                    skip = 1
+) #%>%
+  #select(-contains('crap')) %>%
+  # mutate(annotation_collapsed = case_when(
+  #   name %in% high_annotations ~ 'Enhancer',
+  #   name %in% low_annotations ~ 'Repressed/Heterochromatin',
+  #   name %in% transcribed ~ 'Transcribed',
+  #   name %in% repeats ~ 'Repetitive/Insulator',
+  #   name %in% poised ~ 'Poised promoter'
+  # ))
+
+# chromHMM %>%
+#   filter(is.na(annotation_collapsed))
+
+chromHMM_granges = makeGRangesFromDataFrame(chromHMM, keep.extra.columns = T)
+```
+
+```{r message=F}
+random_regions_granges = read_tsv('../random_5kb_regions.txt', 
+                                  col_names = c('chrom', 'start','stop', 'crap1', 'crap2', 'crap3')) %>%
+                      makeGRangesFromDataFrame()
+```
+
+```{r}
+chromHMM %>%
+    mutate(size = stop - start) %>%
+    summarise(med_size = median(size))
+```
+
+```{r warning = F}
+random_regions_chromhmm = findOverlaps(random_regions_granges, 
+                                      chromHMM_granges, 
+                                      minoverlap = 500)
+
+random_regions_segmentation = bind_cols(
+    random_regions_granges[queryHits(random_regions_chromhmm)] %>%
+        as.data.frame(),
+    chromHMM_granges[subjectHits(random_regions_chromhmm)] %>%
+        as.data.frame() %>%
+        select('name')) #%>%
+    # dplyr::rename('new_annotation' = 'name')
+```
+
+```{r}
+all_clusters_chromhmm = findOverlaps(all_clusters_granges, 
+                                      chromHMM_granges, 
+                                      minoverlap = 200)
+
+all_clusters_segmentation = bind_cols(
+    all_clusters_granges[queryHits(all_clusters_chromhmm)] %>%
+        as.data.frame(),
+    chromHMM_granges[subjectHits(all_clusters_chromhmm)] %>%
+        as.data.frame() %>%
+        select('name')) #%>%
+    # dplyr::rename('new_annotation' = 'name')
+```
+
+```{r}
+all_clusters_segmentation %>%
+    count(loc_id)
+```
+
+```{r}
+all_clusters_segmentation %>%
+    ggplot(aes(new_annotation)) +
+    geom_bar() +
+    pretty_theme()
+```
+
+```{r}
+# random_regions_segmentation %>%
+    # mutate(random = 'random') %>%
+  all_clusters_segmentation %>%
+    # bind_rows(all_clusters_segmentation %>% mutate(random = 'TRIP')) %>%
+  mutate(annotation_collapsed = case_when(
+    name %in% high_annotations ~ 'Enhancer',
+    name %in% low_annotations ~ 'Repressed/Heterochromatin',
+    name %in% transcribed ~ 'Transcribed',
+    name %in% repeats ~ 'Repetitive/Insulator'
+  )) %>%
+    ggplot(aes(y = name)) +
+    geom_bar(col = 'black', position = 'dodge', fill = 'yellow3') +
+    pretty_theme() +
+    # scale_fill_manual(values = c('lightgray', 'yellow3')) +
+    scale_x_continuous(expand = c(0,0), limits = c(-10, 1500)) +
+    ylab('') +
+    theme(text = element_text(size = 16))
+
+ggsave('figures/chromHMM regions.pdf', width = 6, height = 8)
+```
+
+Promoters sorted by rank
+
+```{r}
+ranked_locations =
+    all_clusters %>%
+    dplyr::select(-chr, -start, -stop, -cluster, -value) %>%
+    mutate(loc_mean = rowMeans(dplyr::select(., -loc_id), na.rm = TRUE)) %>%
+    arrange(loc_mean) %>%
+    rownames_to_column('rank') %>%
+    mutate(rank = as.numeric(rank)) %>%
+    # mutate(rank = normalize(rank)) %>%
+    dplyr::select(rank, loc_id) %>%
+    inner_join(all_clusters %>% dplyr::select(-chr, -start, -stop, -value)) %>%
+    pivot_longer(cols = -c('loc_id', 'rank', 'cluster'), names_to = 'iBC', values_to = 'exp') %>%
+    mutate(iBC = factor(iBC, levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) 
+
+ranked_locations %>%
+    ggplot(aes(rank, exp, colour = iBC)) +
+    # geom_point() +
+    pretty_theme() +
+    geom_smooth(method = 'loess', fill = 'lightgray') +
+    ylab('log2(exp)') +
+    # scale_colour_discrete_qualitative(palette = 'Dark 3') +
+    scale_colour_manual(values = prom_colours) +
+    labs(colour = 'Promoter') +
+    xlab('Genomic regions rank') #+
+    # # ylim(-4.5 , 4)
+
+# ggsave('figures/imputed promoters sorted by rank.pdf', dpi = 600)
+```
+
+```{r}
+fit_loess = function(df){
+  current_model = loess(exp ~ rank, data = df)
+  
+  promoter = df$iBC[[1]]
+  
+  predict(current_model, seq(1:1278)) %>%
+      as_tibble() %>%
+      mutate(iBC = promoter) %>%
+      rownames_to_column()
+}
+```
+
+```{r}
+loess_mat = ranked_locations %>%
+    split(.$iBC) %>%
+    map(~ fit_loess(.x)) %>%
+    reduce(bind_rows) %>%
+    pivot_wider(id_cols = rowname, names_from = iBC, values_from = value) %>%
+    dplyr::select(-rowname) %>%
+    as.matrix()
+```
+
+```{r}
+loess_mat %>%
+    ggcorr()
+```
+
+```{r}
+autoplot(prcomp(t(loess_mat[rowSums(is.na(loess_mat)) == 0, ])))
+```
+
+
+```{r}
+cor(loess_mat, use = "complete")
+```
+
+```{r}
+col3 <- colorRampPalette(c("white", "pink3"))
+```
+
+```{r}
+# pdf('figures/loess corr plot.pdf')
+png('figures/loess corr plot.png', res = 600, width = 6, height = 6, units = 'in')
+corrplot::corrplot(
+  cor(loess_mat, use = "complete", method = 'pearson'),
+  order = "hclust",
+   # col = col3(200),
+  cl.lim = c(0.88, 1),
+  is.corr = FALSE,
+  method = 'color'
+)
+dev.off()
+```
+
+Model
+
+```{r}
+location_model = lm(exp ~ loc_id * iBC , data = all_clusters_long)
+anova_location_model = anova(location_model)
+anova_sum_squares = anova_location_model$"Sum Sq"
+cbind(anova_location_model,
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+
+tmp = all_clusters_long %>%
+  mutate(strength = case_when(
+      grepl('1', iBC) ~ 'strong',
+      TRUE ~ 'weak'
+    ))
+
+cluster_model = lm(exp ~ loc_id:strength + iBC, 
+                   data = tmp)
+anova_cluster_model = anova(cluster_model)
+anova_sum_squares = anova_cluster_model$"Sum Sq"
+cbind(anova_cluster_model,
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+summary(cluster_model)$adj.r.squared
+
+correlation = signif(summary(location_model)$adj.r.squared, 2)
+# anova(location_model, cluster_model)
+
+all_clusters_long %>% 
+    mutate(predicted = predict(location_model)) %>%
+    ggplot(aes(exp, predicted)) +
+    geom_point() +
+    pretty_theme() +
+    annotate('text', x = -7, y = 3.4, label = paste('R^2 ==', correlation), size = 5, parse = TRUE) 
+
+# ggsave('figures/location model prediction.pdf', width = 5, height = 4)
+```
+
+```{r}
+cluster_model1 = lm(exp ~ loc_id + iBC, 
+                    data = all_clusters_long %>% 
+                        filter(cluster == 'high'))
+anova_cluster_model1 = anova(cluster_model1)
+anova_sum_squares = anova_cluster_model1$"Sum Sq"
+high_var_exp = cbind(anova_cluster_model1,
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+
+cluster_model2 = lm(exp ~ loc_id + iBC, 
+                    data = all_clusters_long %>% 
+                        filter(cluster == 'medium'))
+anova_cluster_model2 = anova(cluster_model2)
+anova_sum_squares = anova_cluster_model2$"Sum Sq"
+medium_var_exp = cbind(anova_cluster_model2,
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+
+cluster_model3 = lm(exp ~ loc_id + iBC, 
+                    data = all_clusters_long %>% 
+                        filter(cluster == 'low'))
+anova_cluster_model3 = anova(cluster_model3)
+anova_sum_squares = anova_cluster_model3$"Sum Sq"
+low_var_exp = cbind(anova_cluster_model3,
+            PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+```
+
+```{r}
+clusters_var_explained = bind_rows(high_var_exp %>%
+    rownames_to_column() %>%
+    mutate(cluster = 'high'),
+    medium_var_exp %>%
+        rownames_to_column() %>%
+        mutate(cluster = 'medium'),
+    low_var_exp %>%
+        rownames_to_column() %>%
+        mutate(cluster = 'low'))
+
+clusters_var_explained %>%
+    mutate(rowname = case_when(
+        rowname == 'loc_id' ~ 'Location',
+        rowname == 'iBC' ~ 'Promoter',
+        rowname == 'Residuals' ~ 'Residuals'
+    )) %>%
+    mutate(rowname = factor(rowname, levels = c('Residuals', 'Promoter', 'Location')),
+           cluster = factor(cluster, levels = c('low', 'medium', 'high'))) %>%
+    ggplot(aes(cluster, PctExp, fill = rowname)) +
+    geom_col(col = 'black') +
+    pretty_theme() +
+    scale_y_continuous(expand = c(0,0), limits = c(0, 110)) +
+    ylab('Variance explained') + 
+    xlab('') +
+    scale_fill_manual(values = c('#D1D3D4', '#dedf7f', '#54819c'))
+
+ggsave('figures/clusters var explained.pdf', width = 7, height = 5)
+```
+
+```{r}
+# tmp =
+#     all_clusters %>%
+#     select(-loc_id, -value) %>%
+#     mutate(start = as.numeric(start), stop = as.numeric(stop))
+# 
+# write_tsv(tmp, '../../../Promoter Screen/Draft/Supplemental Files/TRIP regions and cluster annotations.tsv')
+```
+
+```{r}
+library(drc)
+```
+
+```{r}
+fit_logistic = function(df){
+    
+    # hk1_fit = nls(exp ~ SSfpl(rank, Asym, mid, scal), data = hk1)
+    # hk1_fit = nls(exp ~  Asym/(1+exp((xmid-rank)/scal)), start = list(Asym = 2.6,xmid = 660,scal = 116), data= hk1)
+    df_fit = drm(exp ~ rank, fct = L.4(), data = df)
+    
+    promoter = df$iBC[[1]]
+    
+    coef(df_fit) %>%
+        as.data.frame() %>%
+        mutate(iBC = promoter) %>%
+        rename('value' = '.') %>%
+        rownames_to_column('param')
+    
+    # df %>%
+    #     mutate(predicted = predict(df_fit)) %>%
+    #     ggplot(aes(rank, predicted)) +
+    #     geom_point() + 
+    #     geom_smooth(aes(rank, exp), method = 'loess') 
+}
+```
+
+```{r}
+plot_logistic = function(df){
+    
+    # hk1_fit = nls(exp ~ SSfpl(rank, Asym, mid, scal), data = hk1)
+    # hk1_fit = nls(exp ~  Asym/(1+exp((xmid-rank)/scal)), start = list(Asym = 2.6,xmid = 660,scal = 116), data= hk1)
+    df_fit = drm(exp ~ rank, fct = L.4(), data = df)
+    
+    # promoter = df$iBC[[1]]
+    predicted_values = predict(df_fit)
+    
+    tmp = df %>%
+        mutate(predicted = predicted_values) 
+        # ggplot(aes(rank, predicted)) +
+        # geom_point() +
+        # geom_smooth(aes(rank, exp), method = 'loess')
+        
+    get_correlation(tmp$exp, tmp$predicted)
+}
+```
+
+```{r}
+logistic_params =
+    ranked_locations %>%
+    filter(!is.na(exp)) %>%
+    split(.$iBC) %>%
+    map(~ fit_logistic(.x)) %>%
+    reduce(bind_rows) %>%
+    inner_join(LP_rank, by = c('iBC' = 'construct'))
+
+# logistic_params %>%
+#     filter(param == 'e:(Intercept)') %>%
+#     ggplot(aes(all_LP_mean, value)) +
+#     geom_point() +
+#     pretty_theme_facet() +
+#     # facet_wrap(~ param) +
+#     geom_smooth(method = 'lm')
+```
+
+```{r}
+library(ggfortify)
+library(ggrepel)
+```
+
+```{r}
+log_params_wide =
+    logistic_params %>% 
+    pivot_wider(id_cols = 'iBC', names_from = 'param', values_from = 'value') 
+
+tmp = log_params_wide %>%
+    dplyr::select(-iBC) %>%
+    as.matrix()
+
+pca_params = prcomp(tmp)
+autoplot(pca_params, data = log_params_wide, colour = 'iBC') +
+    pretty_theme() +
+    geom_text_repel(aes(label = iBC, col = iBC)) +
+    theme(legend.position = 'none')
+
+ggsave('log curves pca.png', dpi = 600, width = 6, height = 6)
+```
+
+Find max corr for each LP
+
+```{r}
+calculate_spearman_corr_per_LP = function(df){
+    tmp = df %>%
+        inner_join(plasmid_exp, by = c('iBC' = 'construct'))
+    
+    corr1 = get_correlation(tmp$exp, tmp$LP3)
+    corr2 = get_correlation(tmp$exp, tmp$LP4)
+    corr3 = get_correlation(tmp$exp, tmp$LP5)
+    corr4 = get_correlation(tmp$exp, tmp$LP6)
+    
+    data.frame('loc1' = corr1,
+               'loc2' = corr2,
+               'loc3' = corr3,
+               'loc4' = corr4,
+               'loc_id' = tmp$loc_id[[1]]
+               )
+    
+}
+```
+
+```{r}
+correlations_per_LP = all_clusters_long %>%
+    split(.$loc_id) %>%
+    map(~ calculate_spearman_corr_per_LP(.x)) %>%
+    reduce(bind_rows)
+```
+
+```{r}
+correlations_per_LP %>%
+    arrange(desc(loc1)) %>%
+    inner_join(ranked_locations %>% distinct(loc_id, rank, cluster)) %>%
+    filter(loc2 == 1)
+```
+
+Find clusters that are far from H3K27ac regions
+
+```{r}
+subsetByOverlaps(all_clusters_granges, H3K27ac_extended, invert = TRUE)
+```
+
+```{r}
+all_clusters %>%
+    filter(cluster == 'high') %>%
+    filter(dev3 < dev2)
+```
+

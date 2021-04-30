@@ -1,0 +1,219 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r message=F}
+library(deming)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+pretty_theme <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), text = element_text(size=24), panel.border = element_blank(), axis.line = element_line(colour = "black"))
+}
+
+pretty_theme_facet <- function () { 
+    theme_bw(base_size = 12, base_family = 'Helvetica') + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.title = element_text(hjust = 0.5), text = element_text(size=24), strip.background = element_blank(),
+   panel.border = element_rect(colour="black"))
+}
+```
+
+```{r message = F}
+V4 <- read_tsv("V4 -CRE expression.txt")
+V4_alternate <- read_tsv("V4 alternate -CRE expression.txt")
+
+V2_CRE_correct <- read_tsv("V2 correct +CRE expression.txt")
+```
+
+```{r}
+get_correlation = function(data1, data2, square = FALSE){
+  
+  if (square == TRUE){
+      signif((cor.test(data1, data2)$estimate)**2, 2)
+  } else {
+      signif(cor.test(data1, data2)$estimate, 2)
+  }
+}
+```
+
+```{r}
+calculate_corr_by_LP = function(df, selected_LP){
+  
+    tmp = df %>%
+          filter(LP == selected_LP)
+    
+    cor_df = data.frame(LP = selected_LP,
+                        correlation = get_correlation(tmp$mean_exp.x, tmp$mean_exp.y)
+                        ) 
+    
+    return (cor_df)
+}
+```
+
+```{r fig.width=8}
+joined = inner_join(V4, V2_CRE_correct, by = c('LP', 'promoter', 'housekeeping_vs_developmental')) %>%
+  filter(LP != 'LP6')
+
+LPs = c('LP3', 'LP4', 'LP5')
+
+correlation_df = LPs %>%
+    map(~ calculate_corr_by_LP(joined, .x)) %>%
+    reduce(bind_rows)
+
+joined_hk = joined %>%
+  filter(housekeeping_vs_developmental == 'hk')
+joined_dev = joined %>%
+  filter(housekeeping_vs_developmental == 'dev')
+
+correlation = signif(cor.test(joined$mean_exp.x, joined$mean_exp.y)$estimate, 2)
+# cor.test(joined_hk$mean_exp.x, joined_hk$mean_exp.y)
+# cor.test(joined_dev$mean_exp.x, joined_dev$mean_exp.y)
+
+joined %>%
+  ggplot(aes(mean_exp.x, mean_exp.y, col = LP)) +
+  geom_point(alpha = 0.8, shape = 16) +
+  pretty_theme() +
+  # pretty_theme_facet() +
+  # facet_wrap(~ LP) +
+  xlab('-CRE') + 
+  ylab('+CRE') + 
+  # geom_smooth(method = 'lm') + 
+  # theme(legend.position = "none") +
+  scale_colour_manual(values = c('#afa8ac', '#717566', '#748CAB')) +
+  annotate("text", x = -3, y = 2, label = paste0('r=', correlation), size = 6)
+  # geom_text(data = correlation_df, aes(x = -3, y = 2, label = correlation), size = 5)
+
+ggsave('CRE no CRE correlation.pdf', width = 7, height = 6)
+```
+
+differences between -CRE and +CRE??
+
+```{r}
+find_CRE_outliers = function(selected_LP, plot = F){
+  
+  filtered = joined %>%
+    filter(LP == selected_LP)
+  
+  comparison_lm = deming(mean_exp.x ~ mean_exp.y, filtered)
+  
+  outliers = filtered %>%
+    # ungroup() %>%
+    mutate(resid = abs(residuals(comparison_lm))) %>%
+    top_frac(0.1, resid) #%>%
+    # select(oligo_id) 
+  
+  if (plot == T){
+    print(
+      filtered %>%
+        mutate(outlier = case_when(
+          promoter %in% outliers$promoter ~ 'Y',
+          TRUE ~ 'N'
+        )) %>%
+        ggplot(aes(mean_exp.x, mean_exp.y, colour = outlier)) +
+        geom_point() +
+        coord_fixed() +
+        pretty_theme()
+    )
+  }
+  
+  return(outliers)
+  
+  
+}
+```
+
+```{r}
+find_CRE_outliers('LP3', plot = T)
+```
+
+
+```{r}
+LP3 = find_CRE_outliers('LP3')
+LP4 = find_CRE_outliers('LP4')
+LP5 = find_CRE_outliers('LP5')
+```
+
+The outliers are either just noise, or these promoters somehow interact with the landing pad differently with and without CREs 
+
+```{r}
+inner_join(LP3, LP5, by = 'promoter') %>%
+  nrow()
+```
+
+```{r}
+add_CRE_diff_residuals = function(selected_LP, plot = F){
+  
+  filtered = joined %>%
+    filter(LP == selected_LP)
+  
+  comparison_lm = deming(mean_exp.x ~ mean_exp.y, filtered)
+  
+  filtered %>%
+    mutate(resid = abs(residuals(comparison_lm)))
+}
+```
+
+```{r}
+LP3_residuals = add_CRE_diff_residuals('LP3')
+LP4_residuals = add_CRE_diff_residuals('LP4')
+LP5_residuals = add_CRE_diff_residuals('LP5')
+```
+
+```{r}
+LP3_residuals %>%
+  ggplot(aes(housekeeping_vs_developmental, resid)) + 
+  geom_boxplot() + 
+  pretty_theme()
+```
+
+
+If there's no correlation between the residuals, that means the outliers are pretty different.
+
+```{r}
+inner_join(LP4_residuals, LP5_residuals, by = 'promoter') %>%
+  ggplot(aes(resid.x, resid.y)) + 
+  geom_point() + 
+  pretty_theme()
+```
+
+```{r}
+joined_long = joined %>%
+  rename('-CRE' = 'mean_exp.x', '+CRE' = 'mean_exp.y') %>%
+  pivot_longer(cols = c('-CRE', '+CRE'), 
+              names_to = 'CRE', 
+              values_to = 'mean_exp')
+```
+
+The promoter term is different depending on whether or not the CRE is present 
+
+```{r}
+model = lm(mean_exp ~ LP + promoter*CRE, data = joined_long)
+# summary(original_model)
+anova_model = anova(model)
+anova_sum_squares = anova_model$"Sum Sq"
+cbind(anova_model, 
+      PctExp = anova_sum_squares/sum(anova_sum_squares)*100)
+```
+
+
+```{r message=F}
+no_CRE_LP4LP5_outliers = read_tsv('V4 -CRE LP4 LP5 outliers.tsv')
+with_CRE_LP4LP5_outliers = read_tsv('V2 +CRE LP4 LP5 outliers.tsv')
+```
+
+```{r}
+common_LP4LP5_outliers = inner_join(no_CRE_LP4LP5_outliers, with_CRE_LP4LP5_outliers, by = 'oligo_id')
+
+no_CRE_LP4LP5_outliers %>%
+  mutate(overlap = case_when(
+    oligo_id %in% common_LP4LP5_outliers$oligo_id ~ 'T',
+    TRUE ~ 'F'
+  )) %>%
+  ggplot(aes(overlap, resid)) + 
+  geom_boxplot() + 
+  pretty_theme()
+```
+

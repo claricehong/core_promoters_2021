@@ -1,0 +1,116 @@
+---
+title: "predict unused locs"
+output: html_document
+---
+
+```{r message=F}
+library(BSgenome.Hsapiens.NCBI.GRCh38)
+library(tidyverse)
+```
+
+```{r}
+windowsFonts(Helvetica = 'TT Helvetica')
+```
+
+```{r}
+set.seed(2301)
+
+unused_1kb_surrounding = all_unused_locs %>%
+    mutate(start = location - 500, stop = location + 500) %>%
+    separate(chr, into = c('crap', 'chr'), sep = 'chr') %>%
+    select(-crap) %>%
+    # sample_n(5000) %>%
+    mutate(name = paste(chr, tBC, iBC, sep = '-')) %>%
+    distinct(name, .keep_all = TRUE) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+unused_1kb_surr_seq = getSeq(BSgenome.Hsapiens.NCBI.GRCh38, unused_1kb_surrounding)
+
+names(unused_1kb_surr_seq) = unused_1kb_surrounding$name
+
+writeXStringSet(unused_1kb_surr_seq, 'predict_non_clustered_locs/unused_1kb_seqs.fa')
+```
+
+```{r}
+unused_1kb_high_vs_med_scores = read_tsv('predict_non_clustered_locs/high_vs_medium_weights.out', 
+                                        col_names = c('name', 'highmed_score')) %>%
+    separate(name, into = c('chr', 'tBC', 'iBC'), sep = '-')
+
+unused_1kb_high_vs_med_scores %>%
+    ggplot(aes(highmed_score)) +
+    geom_density() +
+    pretty_theme()
+
+highmed_mean = unused_1kb_high_vs_med_scores %>%
+    summarise(mean = mean(highmed_score))
+```
+
+```{r}
+unused_1kb_high_vs_low_scores = read_tsv('predict_non_clustered_locs/high_vs_low_weights.out', 
+                                        col_names = c('name', 'highlow_score')) %>%
+    separate(name, into = c('chr', 'tBC', 'iBC'), sep = '-')
+
+unused_1kb_high_vs_low_scores %>%
+    ggplot(aes(highlow_score)) +
+    geom_density() +
+    pretty_theme()
+
+highlow_mean = unused_1kb_high_vs_low_scores %>%
+    summarise(mean = mean(highlow_score))
+```
+
+```{r}
+unused_1kb_med_vs_low_scores = read_tsv('predict_non_clustered_locs/medium_vs_low_weights.out', 
+                                        col_names = c('name', 'medlow_score')) %>%
+    separate(name, into = c('chr', 'tBC', 'iBC'), sep = '-')
+
+unused_1kb_med_vs_low_scores %>%
+    ggplot(aes(medlow_score)) +
+    geom_density() +
+    pretty_theme()
+
+medlow_mean = unused_1kb_med_vs_low_scores %>%
+    summarise(mean = mean(medlow_score))
+```
+
+```{r}
+predicted_clusters = inner_join(unused_1kb_high_vs_med_scores, unused_1kb_high_vs_low_scores, by = c('chr', 'tBC', 'iBC')) %>%
+    inner_join(unused_1kb_med_vs_low_scores, by = c('chr', 'tBC', 'iBC')) %>%
+    mutate(chr = paste0('chr', chr)) %>%
+    inner_join(all_mapped, by = c('chr', 'tBC', 'iBC')) %>%
+    mutate(predicted_cluster = case_when(
+        highmed_score >= highmed_mean$mean & highlow_score >= highlow_mean$mean ~ 'high',
+        highmed_score < highmed_mean$mean & medlow_score >= medlow_mean$mean ~ 'medium',
+        highlow_score < highlow_mean$mean & medlow_score < medlow_mean$mean ~ 'low',
+    )) %>%
+    mutate(predicted_cluster  = factor(predicted_cluster, 
+                                       levels = c('low', 'medium', 'high')),
+           iBC = factor(iBC, 
+                        levels = c('dev2', 'hk2', 'dev3', 'hk3', 'dev1', 'hk1'))) %>%
+    filter(!is.na(predicted_cluster)) 
+
+predicted_clusters %>%
+    ggplot(aes(iBC, exp, fill = predicted_cluster)) +
+    geom_boxplot() +
+    pretty_theme() +
+    add_cluster_colour() +
+    theme(legend.position = 'right',
+          text = element_text(size = 20))
+# 
+ggsave('predict_non_clustered_locs/predicted cluster exp.pdf', width = 8)
+```
+```{r}
+count(predicted_clusters, iBC, predicted_cluster)
+```
+
+
+```{r}
+predicted_clusters %>%
+    ggplot(aes(iBC, exp, fill = iBC)) +
+    geom_boxplot() +
+    pretty_theme_facet() +
+    facet_wrap(~ predicted_cluster)
+```
+

@@ -1,0 +1,117 @@
+---
+title: "trellis_plot"
+output: html_document
+---
+
+---
+title: "trellis plot"
+output: html_document
+---
+
+```{r message=F}
+library(gtrellis)
+```
+
+```{r}
+all_hk1_mapped =
+    all_mapped %>%
+    filter(iBC == 'hk1') %>%
+    mutate(start = location, end = location) %>%
+    select(chr, start, end, strand, exp) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+
+all_hk2_mapped = 
+    all_mapped %>%
+    filter(iBC == 'hk2') %>%
+    mutate(start = location, end = location) %>%
+    select(chr, start, end, strand, exp) %>%
+    makeGRangesFromDataFrame(keep.extra.columns = T)
+```
+
+```{r}
+gtrellis_layout(n_track = 1,
+                ncol = 5,
+                species = 'hg38',
+                track_ylim = range(all_mapped$exp),
+                category = 'chr1')
+
+add_lines_track(all_hk1_mapped, 
+                 value = all_hk1_mapped$exp,
+                 gp = gpar(col = 'red'))
+
+add_points_track(all_hk2_mapped, 
+                 value = all_hk2_mapped$exp,
+                 track = current_track())
+
+```
+
+```{r}
+high_track = all_clusters %>% 
+    select(chr, start, stop, cluster) %>%
+    mutate(start = as.numeric(start), stop = as.numeric(stop)) %>%
+    filter(cluster == 'high')
+
+medium_track = all_clusters %>% 
+    select(chr, start, stop, cluster) %>%
+    mutate(start = as.numeric(start), stop = as.numeric(stop)) %>%
+    filter(cluster == 'medium')
+
+low_track = all_clusters %>% 
+    select(chr, start, stop, cluster) %>%
+    mutate(start = as.numeric(start), stop = as.numeric(stop)) %>%
+    filter(cluster == 'low')
+```
+
+```{r}
+# png('coreonly_figures/cluster locations trellis.png', res = 300, width = 6, height = 6, unit = 'in')
+pdf('figures/cluster locations trellis.pdf', width = 6, height = 6)
+
+gtrellis_layout(n_track = 1,
+                ncol = 1, 
+                track_axis = FALSE,
+                xpadding = c(0.1, 0),
+                gap = unit(0.5, 'mm'),
+                border = FALSE,
+                asist_ticks = FALSE,
+                add_ideogram_track = TRUE,
+                ideogram_track_height = unit(2, 'mm')
+)
+
+# c('#5a2378', '#d35658', '#f4e76c')
+
+add_track(high_track,
+          panel_fun = function(gr) {
+        grid.rect(gr[[2]], unit(0.2, "npc"), unit(0.5, 'mm'), unit(0.5, "npc"), 
+        hjust = 0, vjust = 0, default.units = "native",s
+        gp = gpar(fill = '#f4e76c', col = NA))
+        })
+
+add_track(medium_track,
+          track = current_track(),
+          panel_fun = function(gr) {
+        grid.rect(gr[[2]], unit(0.2, "npc"), unit(0.5, 'mm'), unit(0.5, "npc"), 
+        hjust = 0, vjust = 0, default.units = "native",
+        gp = gpar(fill = '#d35658', col = NA))
+        })
+
+add_track(low_track,
+          track = current_track(),
+          panel_fun = function(gr) {
+        grid.rect(gr[[2]], unit(0.2, "npc"), unit(0.5, 'mm'), unit(0.5, "npc"), 
+        hjust = 0, vjust = 0, default.units = "native",
+        gp = gpar(fill = '#5a2378', col = NA))
+        })
+
+add_track(track = 2, clip = FALSE, panel_fun = function(gr) {
+    chr = get_cell_meta_data("name")
+    if(chr == "chrY") {
+        grid.lines(get_cell_meta_data("xlim"), unit(c(0, 0), "npc"), 
+            default.units = "native")
+    }
+    grid.text(chr, x = 0, y = 0, just = c("left", "bottom"))
+})
+
+dev.off()
+```
+
+

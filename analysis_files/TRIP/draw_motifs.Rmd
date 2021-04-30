@@ -1,0 +1,48 @@
+---
+title: "draw motifs"
+output: html_document
+---
+
+```{r message=F}
+library(ggseqlogo)
+library(universalmotif)
+library(tidyverse)
+```
+
+```{r}
+highmed_dreme = read_meme('gkmSVM/highmed_dreme.txt')
+highlow_dreme = read_meme('gkmSVM/highlow_dreme.txt')
+medlow_dreme = read_meme('gkmSVM/medlow_dreme.txt')
+```
+
+```{r}
+act_neu_motif_mat = highmed_dreme %>%
+    map(~ .x@motif) %>%
+    set_names(highmed_dreme %>% map_chr(~ .x@name))
+
+ggseqlogo(act_neu_motif_mat[1:6], ncol = 3)
+
+ggsave('gkmsvm/highmed_dreme_top8.pdf', height = 4, width = 7)
+```
+
+```{r}
+act_rep_motif_mat = highlow_dreme %>%
+    map(~ .x@motif) %>%
+    set_names(highlow_dreme %>% map_chr(~ .x@name))
+
+ggseqlogo(act_rep_motif_mat[1:6], ncol = 3)
+
+ggsave('gkmsvm/highlow_dreme_top8.pdf', height = 4, width = 7)
+```
+
+```{r}
+neu_rep_motif_mat = medlow_dreme %>%
+    map(~ .x@motif) %>%
+    set_names(medlow_dreme %>% map_chr(~ .x@name))
+
+ggseqlogo(neu_rep_motif_mat[1:6], ncol = 3)
+
+ggsave('gkmsvm/medlow_dreme_top8.pdf', height = 4, width = 7)
+```
+
+
